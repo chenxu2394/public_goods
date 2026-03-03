@@ -1,0 +1,60 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor/IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.hypothesis/
+.tox/
+.nox/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build artifacts
+build/
+dist/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Environment and local runtime files
+.env
+.env.*
+!.env.example
+*.log
+
+# Local SQLite data files
+*.db
+*.db-*
+/public_goods.db
+/public_goods.db-*
+*.sqlite
+*.sqlite3
+
+# Keep lockfile and CI/deploy config tracked
+!uv.lock
+!.github/

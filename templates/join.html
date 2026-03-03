@@ -1,0 +1,27 @@
+{% extends "_base.html" %}
+{% set heading = "Join Session" %}
+{% set subheading = sess.title %}
+{% block content %}
+<div class="card">
+  <div class="muted">
+    Whitelist count for this session: <b>{{ counts.whitelist }}</b>.
+    Student ID and name must exactly match the whitelist.
+  </div>
+
+  <form method="post" action="/join/{{ sess.id }}" style="margin-top:12px;">
+    <div class="row">
+      <div class="col">
+        <div class="muted">Student ID (must be in whitelist)</div>
+        <input name="student_id" placeholder="Example: 20260001" required />
+      </div>
+      <div class="col">
+        <div class="muted">Name (must match exactly)</div>
+        <input name="name" placeholder="Example: Alice" required />
+      </div>
+      <div class="col" style="align-self:flex-end;">
+        <button type="submit">Enter student page</button>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}

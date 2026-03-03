@@ -1,0 +1,113 @@
+{% extends "_base.html" %}
+{% set heading = "Student Page" %}
+{% set subheading = sess.title %}
+{% block top_right %}
+  <span class="pill">Student ID {{ stu.student_id }}</span>
+{% endblock %}
+{% block content %}
+<div class="card">
+  <div><b>{{ stu.name }}</b> (student ID: <span class="mono">{{ stu.student_id }}</span>)</div>
+  <div>Group: <span id="group_no">{% if stu.group_no %}{{ stu.group_no }}{% else %}Pending assignment{% endif %}</span></div>
+  <div class="muted">This page auto-refreshes. Submission status and round income/cumulative values appear after the instructor closes and computes each round.</div>
+</div>
+
+<div class="card">
+  <h3>Current Round Submission</h3>
+  <div>Current round: <b id="cur_round">{{ sess.current_round }}</b>
+      Status: <span id="round_state" class="pill">{% if sess.round_open == 1 %}Open{% else %}Closed{% endif %}</span>
+  </div>
+  <div style="margin-top:10px;">
+    <form id="submit_form">
+      <input type="hidden" name="student_id" value="{{ stu.student_id }}"/>
+      <div class="row">
+        <div class="col">
+          <div class="muted">Contribution (0-{{ sess.endowment }})</div>
+          <input name="contrib" id="contrib" type="number" min="0" max="{{ sess.endowment }}" value="0"/>
+        </div>
+        <div class="col" style="align-self:flex-end;">
+          <button type="submit">Submit / Update</button>
+        </div>
+        <div class="col" style="align-self:flex-end;">
+          <span id="submit_msg" class="muted"></span>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Income History</h3>
+  <div class="muted">After the final round is computed, cumulative income is your total payoff.</div>
+  <div style="overflow:auto; margin-top:10px;">
+    <table id="hist_table">
+      <tr>
+        <th>Round</th><th>Group</th><th>Group size</th><th>Group total contribution</th><th>Public return (per person)</th><th>Round income</th><th>Cumulative income</th><th>Computed at</th>
+      </tr>
+    </table>
+  </div>
+</div>
+
+<script>
+const sessionId = "{{ sess.id }}";
+const studentId = "{{ stu.student_id }}";
+
+async function fetchStatus(){
+  const res = await fetch(`/api/${sessionId}/status?student_id=${encodeURIComponent(studentId)}`);
+  if(!res.ok) return;
+  const data = await res.json();
+
+  document.getElementById("cur_round").innerText = data.session.current_round;
+  document.getElementById("group_no").innerText = data.student.group_no ?? "Pending assignment";
+
+  const stateEl = document.getElementById("round_state");
+  stateEl.innerText = data.session.round_open ? "Open" : "Closed";
+  stateEl.className = "pill " + (data.session.round_open ? "ok" : "muted");
+
+  const msg = document.getElementById("submit_msg");
+  if(data.current_round.submitted_contrib !== null){
+    msg.innerText = `Submitted: ${data.current_round.submitted_contrib}`;
+  } else {
+    msg.innerText = data.session.round_open ? "Not submitted yet" : "Round closed";
+  }
+
+  const table = document.getElementById("hist_table");
+  while(table.rows.length > 1) table.deleteRow(1);
+  data.history.forEach(r => {
+    const tr = table.insertRow(-1);
+    const cells = [
+      r.round, r.group_no, r.group_n, r.group_total,
+      r.public_return.toFixed(2), r.income.toFixed(2), r.cumulative.toFixed(2),
+      r.computed_at
+    ];
+    cells.forEach(v => {
+      const td = tr.insertCell(-1);
+      td.innerText = v;
+    });
+  });
+
+  const contribInput = document.getElementById("contrib");
+  const submitBtn = document.querySelector("#submit_form button");
+  const disabled = !data.session.round_open;
+  contribInput.disabled = disabled;
+  submitBtn.disabled = disabled;
+}
+
+document.getElementById("submit_form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const res = await fetch(`/api/${sessionId}/submit`, {method:"POST", body: fd});
+  const msg = document.getElementById("submit_msg");
+  if(res.ok){
+    const data = await res.json();
+    msg.innerText = `Submitted: ${data.contrib}`;
+  } else {
+    const t = await res.text();
+    msg.innerText = `Submit failed: ${t}`;
+  }
+  await fetchStatus();
+});
+
+fetchStatus();
+setInterval(fetchStatus, 2000);
+</script>
+{% endblock %}

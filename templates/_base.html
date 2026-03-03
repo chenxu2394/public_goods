@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{{ title if title else "Public Goods Experiment" }}</title>
+  <style>
+    body{font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin:20px; line-height:1.4;}
+    .card{border:1px solid #ddd; border-radius:12px; padding:16px; margin:12px 0;}
+    .row{display:flex; gap:12px; flex-wrap:wrap;}
+    .col{flex:1; min-width:260px;}
+    input, button{font-size:16px; padding:10px 12px; border-radius:10px; border:1px solid #ccc;}
+    button{cursor:pointer;}
+    .muted{color:#666;}
+    .pill{display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid #ccc; font-size:13px;}
+    table{border-collapse:collapse; width:100%;}
+    th,td{border:1px solid #e5e5e5; padding:8px; text-align:center;}
+    th{background:#f6f6f6;}
+    .ok{color:#0a7;}
+    .warn{color:#b50;}
+    .err{color:#c00;}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;}
+    a{color:#06c; text-decoration:none;}
+    a:hover{text-decoration:underline;}
+  </style>
+</head>
+<body>
+  <div class="row">
+    <div class="col">
+      <h2 style="margin:0 0 6px 0;">{{ heading if heading else "" }}</h2>
+      <div class="muted">{{ subheading if subheading else "" }}</div>
+    </div>
+    <div class="col" style="text-align:right;">
+      {% block top_right %}{% endblock %}
+    </div>
+  </div>
+  {% block content %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,120 @@
+{% extends "_base.html" %}
+{% set heading = "Admin Panel" %}
+{% set subheading = sess.title %}
+{% block top_right %}
+  <a href="/admin">&larr; Back</a>
+  <form method="post" action="/admin/logout" style="display:inline; margin-left:10px;">
+    <button type="submit">Sign out</button>
+  </form>
+{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div><b>Student join link:</b> <span class="mono">{{ join_url }}</span></div>
+  <div class="muted">Share this link with students.</div>
+  <div style="margin-top:8px;"><b>Export data:</b> <a href="{{ export_url }}">Download CSV (contributions/income/cumulative by round)</a></div>
+</div>
+
+<div class="card">
+  <h3>Whitelist (student ID + name must match exactly)</h3>
+  <div class="muted">Current whitelist count: <b>{{ counts.whitelist }}</b>. If no whitelist is uploaded, students cannot join.</div>
+
+  <div class="row" style="margin-top:10px;">
+    <div class="col">
+      <div class="muted">Template</div>
+      <a href="{{ template_url }}">Download whitelist CSV template</a>
+    </div>
+
+    <div class="col">
+      <form method="post" action="/admin/{{ sess.id }}/whitelist/upload" enctype="multipart/form-data">
+        <div class="muted">Upload/update whitelist CSV (UTF-8)</div>
+        <input type="file" name="file" accept=".csv" required />
+        <div style="margin-top:8px;">
+          <button type="submit">Upload</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="col" style="text-align:right;">
+      <form method="post" action="/admin/{{ sess.id }}/whitelist/clear" style="display:inline;">
+        <button type="submit">Clear whitelist</button>
+      </form>
+      <div class="muted" style="margin-top:6px;">After clearing, no students can join this session.</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Grouping</h3>
+  <div class="row">
+    <div class="col">
+      <div>Students joined: <b>{{ counts.students }}</b></div>
+      <div>Lock status:
+        {% if sess.locked == 1 %}
+          <span class="pill ok">Locked (late joiners go to last group; new group opens when full)</span>
+        {% else %}
+          <span class="pill warn">Unlocked</span>
+        {% endif %}
+      </div>
+    </div>
+    <div class="col" style="text-align:right;">
+      {% if sess.locked == 0 %}
+      <form method="post" action="/admin/{{ sess.id }}/lock" style="display:inline;">
+        <button type="submit">Randomize groups and lock</button>
+      </form>
+      {% else %}
+        <span class="muted">(To regroup, create a new session.)</span>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Round Control</h3>
+  <div>Current round: <b>{{ sess.current_round }}</b> / {{ sess.rounds }}
+    {% if sess.round_open == 1 %}<span class="pill ok">Accepting submissions</span>{% else %}<span class="pill muted">Closed</span>{% endif %}
+  </div>
+  <div class="row" style="margin-top:10px;">
+    <div class="col">
+      <form method="post" action="/admin/{{ sess.id }}/open_round" class="row">
+        <div class="col">
+          <div class="muted">Select round to open</div>
+          <input name="round_no" type="number" min="1" max="{{ sess.rounds }}" value="{{ sess.current_round }}" />
+        </div>
+        <div class="col" style="align-self:flex-end;">
+          <button type="submit">Open submissions for this round</button>
+        </div>
+      </form>
+    </div>
+    <div class="col" style="text-align:right; align-self:flex-end;">
+      <form method="post" action="/admin/{{ sess.id }}/close_and_compute" style="display:inline;">
+        <button type="submit">Close and compute this round</button>
+      </form>
+      <div class="muted" style="margin-top:6px;">After computing, student pages auto-refresh and show income/cumulative values.</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Students</h3>
+  {% if students|length == 0 %}
+    <div class="muted">No students have joined yet.</div>
+  {% else %}
+  <table>
+    <tr>
+      <th>Joined at</th><th>Student ID</th><th>Name</th><th>Group</th><th>Student page</th>
+    </tr>
+    {% for st in students %}
+      <tr>
+        <td class="mono">{{ st.joined_at }}</td>
+        <td class="mono">{{ st.student_id }}</td>
+        <td>{{ st.name }}</td>
+        <td>{% if st.group_no %}{{ st.group_no }}{% else %}<span class="muted">Not assigned</span>{% endif %}</td>
+        <td><a href="/s/{{ sess.id }}/{{ st.student_id }}">Open</a></td>
+      </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+
+{% endblock %}

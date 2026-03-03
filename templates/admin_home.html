@@ -1,0 +1,62 @@
+{% extends "_base.html" %}
+{% set heading = "Admin Home" %}
+{% set subheading = "Create and manage experiment sessions" %}
+{% block top_right %}
+<form method="post" action="/admin/logout" style="display:inline;">
+  <button type="submit">Sign out</button>
+</form>
+{% endblock %}
+{% block content %}
+<div class="card">
+  <h3>Create New Session</h3>
+  <form method="post" action="/admin/create" class="row">
+    <div class="col">
+      <div class="muted">Title</div>
+      <input name="title" placeholder="Example: MPA-01 Week 3 Public Goods Experiment" required />
+    </div>
+    <div class="col">
+      <div class="muted">Default group size</div>
+      <input name="group_size" type="number" value="5" min="2" max="20" />
+    </div>
+    <div class="col">
+      <div class="muted">Multiplier</div>
+      <input name="multiplier" type="number" value="1.5" step="0.1" min="0.1" max="10" />
+    </div>
+    <div class="col">
+      <div class="muted">Endowment per round</div>
+      <input name="endowment" type="number" value="10" min="1" max="100" />
+    </div>
+    <div class="col">
+      <div class="muted">Rounds</div>
+      <input name="rounds" type="number" value="10" min="1" max="50" />
+    </div>
+    <div class="col" style="align-self:flex-end;">
+      <button type="submit">Create</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Sessions</h3>
+  {% if sessions|length == 0 %}
+    <div class="muted">No sessions yet. Create one first.</div>
+  {% else %}
+    <table>
+      <tr><th>Created at</th><th>Title</th><th>Parameters</th><th>Status</th><th>Open</th></tr>
+      {% for s in sessions %}
+        <tr>
+          <td class="mono">{{ s.created_at }}</td>
+          <td>{{ s.title }}</td>
+          <td>group size={{ s.group_size }}; multiplier={{ s.multiplier }}; endowment={{ s.endowment }}; rounds={{ s.rounds }}</td>
+          <td>
+            {% if s.locked == 1 %}<span class="pill ok">Groups locked</span>{% else %}<span class="pill warn">Unlocked</span>{% endif %}
+            {% if s.round_open == 1 %}<span class="pill ok">Round open</span>{% else %}<span class="pill muted">Round closed</span>{% endif %}
+            <span class="pill">Current round {{ s.current_round }}</span>
+          </td>
+          <td><a href="/admin/{{ s.id }}">Manage</a></td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+</div>
+{% endblock %}
