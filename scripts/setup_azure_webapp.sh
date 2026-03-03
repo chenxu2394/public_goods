@@ -375,6 +375,21 @@ else
   fi
 fi
 
+# Publish-profile based GitHub deployments require SCM/FTP basic publishing auth on the target app.
+info "Enabling basic publishing auth (SCM/FTP) for publish-profile deployment..."
+az resource update -g "$RG" \
+  --namespace Microsoft.Web \
+  --resource-type basicPublishingCredentialsPolicies \
+  --parent "sites/$APP" \
+  --name scm \
+  --set properties.allow=true >/dev/null
+az resource update -g "$RG" \
+  --namespace Microsoft.Web \
+  --resource-type basicPublishingCredentialsPolicies \
+  --parent "sites/$APP" \
+  --name ftp \
+  --set properties.allow=true >/dev/null
+
 tmp_profile="$(mktemp "/tmp/${APP}.PublishProfile.XXXXXX.xml")"
 trap 'rm -f "$tmp_profile"' EXIT
 
