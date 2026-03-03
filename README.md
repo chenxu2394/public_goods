@@ -9,7 +9,7 @@ Set in Azure Web App -> Configuration -> Application settings:
 
 ## Optional settings
 
-- PUBLIC_BASE_URL: https://hitsz.azurewebsites.net (defaults to this)
+- PUBLIC_BASE_URL: https://public-goods.azurewebsites.net (defaults to this)
 - PUBLIC_GOODS_DB_PATH: /home/public_goods.db (defaults to this)
 - ADMIN_COOKIE_SECURE: `1` (default, production) or `0` (local HTTP testing)
 
@@ -60,5 +60,5 @@ Azure Web App settings for private GHCR image pull:
 1. Visit /admin (redirects to /admin/login)
 2. Create a session
 3. Upload whitelist CSV (student_id,name) for that session
-4. Send join link: https://hitsz.azurewebsites.net/join/<session_id>
+4. Send join link: https://public-goods.azurewebsites.net/join/<session_id>
 5. Lock groups, open rounds, close+compute, export CSV

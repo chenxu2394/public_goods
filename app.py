@@ -34,7 +34,7 @@ ADMIN_COOKIE_SECURE = os.environ.get("ADMIN_COOKIE_SECURE", "1").strip().lower()
     "no",
 }
 
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://hitsz.azurewebsites.net").rstrip("/")
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://public-goods.azurewebsites.net").rstrip("/")
 
 app = FastAPI(title="Public Goods Experiment (Azure + Whitelist + Admin Password)")
 templates = Jinja2Templates(directory=os.path.join(APP_DIR, "templates"))

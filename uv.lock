@@ -69,7 +69,7 @@ wheels = [
 ]
 
 [[package]]
-name = "hitsz-public-goods-azure"
+name = "public-goods"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
