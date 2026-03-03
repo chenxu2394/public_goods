@@ -14,6 +14,9 @@
     {% if error %}
       <div class="err">{{ error }}</div>
     {% endif %}
+    {% if pw_changed %}
+      <div class="pill ok" style="margin-bottom:8px;">Password changed. Please sign in with your new password.</div>
+    {% endif %}
     <form method="post" action="/admin/login" style="margin-top:10px;">
       <div class="muted">Admin password</div>
       <input name="password" type="password" required />

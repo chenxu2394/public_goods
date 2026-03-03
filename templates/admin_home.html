@@ -8,6 +8,29 @@
 {% endblock %}
 {% block content %}
 <div class="card">
+  <h3>Change Password</h3>
+  {% if pw_error %}<div class="pill warn" style="margin-bottom:8px;">{{ pw_error }}</div>{% endif %}
+  {% if pw_success %}<div class="pill ok" style="margin-bottom:8px;">{{ pw_success }}</div>{% endif %}
+  <form method="post" action="/admin/change_password" class="row">
+    <div class="col">
+      <div class="muted">Current password</div>
+      <input name="current_password" type="password" required />
+    </div>
+    <div class="col">
+      <div class="muted">New password</div>
+      <input name="new_password" type="password" required />
+    </div>
+    <div class="col">
+      <div class="muted">Confirm new password</div>
+      <input name="confirm_password" type="password" required />
+    </div>
+    <div class="col" style="align-self:flex-end;">
+      <button type="submit">Change Password</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
   <h3>Create New Session</h3>
   <form method="post" action="/admin/create" class="row">
     <div class="col">
