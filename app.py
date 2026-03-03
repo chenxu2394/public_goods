@@ -144,6 +144,15 @@ def init_db():
     """
     )
 
+    cur.execute(
+        """
+    CREATE TABLE IF NOT EXISTS settings(
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )
+    """
+    )
+
     _migrate_student_identifier_columns(conn)
 
     conn.commit()
@@ -198,6 +207,49 @@ def verify_admin_token(token: str) -> bool:
         return True
     except Exception:
         return False
+
+
+def _hash_password(password: str) -> str:
+    """Hash a password using PBKDF2-HMAC-SHA256 with SECRET_KEY as salt."""
+    dk = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        SECRET_KEY.encode("utf-8"),
+        100_000,
+    )
+    return _b64url(dk)
+
+
+def get_setting(key: str) -> Optional[str]:
+    conn = db()
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+def set_setting(key: str, value: str) -> None:
+    conn = db()
+    try:
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (key, value),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def check_admin_password(entered: str) -> bool:
+    """Check if the entered password matches the current admin password.
+    Checks the DB-stored hash first; falls back to the ADMIN_PASSWORD env var."""
+    stored_hash = get_setting("admin_password_hash")
+    if stored_hash is not None:
+        return hmac.compare_digest(stored_hash, _hash_password(entered))
+    return entered == ADMIN_PASSWORD
 
 
 def is_admin(request: Request) -> bool:
@@ -554,15 +606,16 @@ def home():
 @app.get("/admin/login", response_class=HTMLResponse)
 def admin_login_page(request: Request):
     configured = bool(ADMIN_PASSWORD) and bool(SECRET_KEY)
+    pw_changed = request.query_params.get("pw_changed") == "1"
     return templates.TemplateResponse(
-        "admin_login.html", {"request": request, "configured": configured}
+        "admin_login.html", {"request": request, "configured": configured, "pw_changed": pw_changed}
     )
 
 
 @app.post("/admin/login")
 def admin_login_submit(request: Request, password: str = Form(...)):
     _must_configure_admin()
-    if password != ADMIN_PASSWORD:
+    if not check_admin_password(password):
         return templates.TemplateResponse(
             "admin_login.html",
             {"request": request, "configured": True, "error": "Incorrect password"},
@@ -588,6 +641,36 @@ def admin_logout():
     resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
     return resp
 
+
+@app.post("/admin/change_password")
+def admin_change_password(
+    request: Request,
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    confirm_password: str = Form(...),
+):
+    gate = _admin_gate(request)
+    if gate:
+        return gate
+    sessions = list_sessions()
+
+    def _render_error(error: str):
+        return templates.TemplateResponse(
+            "admin_home.html",
+            {"request": request, "sessions": sessions, "pw_error": error},
+            status_code=400,
+        )
+
+    if not check_admin_password(current_password):
+        return _render_error("Current password is incorrect.")
+    if not new_password:
+        return _render_error("New password must not be empty.")
+    if new_password != confirm_password:
+        return _render_error("New passwords do not match.")
+    set_setting("admin_password_hash", _hash_password(new_password))
+    resp = RedirectResponse(url="/admin/login?pw_changed=1", status_code=303)
+    resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
+    return resp
 
 # ---------------- Admin pages ----------------
 
