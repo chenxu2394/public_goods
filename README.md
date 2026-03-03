@@ -48,6 +48,30 @@ Trigger:
 - Push to `main` (ignore `*.md`)
 - Manual run (`workflow_dispatch`)
 
+## One-command Azure setup (CLI)
+
+Prerequisites:
+
+- Azure CLI (`az`) installed and logged in
+- GitHub CLI (`gh`) installed and logged in
+- Workflow file exists in repo: `.github/workflows/deploy-azure-webapp-container.yml`
+- `Dockerfile` exists in repo
+
+Run:
+
+```bash
+./scripts/setup_azure_webapp.sh
+```
+
+The script interactively asks for values, creates Azure resources, configures GHCR pull + app settings, and writes GitHub Actions variable/secret (`AZURE_WEBAPP_NAME`, `AZURE_WEBAPP_PUBLISH_PROFILE`).
+
+If you already have an App Service Plan (for example an existing F1 plan), choose `Use an existing App Service Plan? = Y` and provide its resource ID. To find the ID:
+
+```bash
+az appservice plan list -o table
+az appservice plan show -g <plan-resource-group> -n <plan-name> --query id -o tsv
+```
+
 Azure Web App settings for private GHCR image pull:
 
 - `DOCKER_REGISTRY_SERVER_URL=https://ghcr.io`
