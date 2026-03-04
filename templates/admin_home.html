@@ -78,7 +78,7 @@
           </td>
           <td><a href="/admin/{{ s.id }}">Manage</a></td>
           <td>
-            <form method="post" action="/admin/{{ s.id }}/delete" onsubmit="return confirm('Are you sure you want to delete the session &quot;{{ s.title }}&quot;? This cannot be undone.');">
+            <form method="post" action="/admin/{{ s.id }}/delete" onsubmit="return confirm({{ ('Are you sure you want to delete the session \"%s\"? This cannot be undone.' % s.title)|tojson }});">
               <button type="submit">Delete</button>
             </form>
           </td>
