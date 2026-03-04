@@ -7,6 +7,52 @@
 </form>
 {% endblock %}
 {% block content %}
+
+<!-- Delete confirmation modal -->
+<div id="delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000; align-items:center; justify-content:center;">
+  <div style="background:#fff; border-radius:12px; padding:28px 32px; max-width:480px; width:90%; box-shadow:0 4px 24px rgba(0,0,0,0.18);">
+    <h3 id="delete-modal-title" style="margin:0 0 12px 0;">Delete Session</h3>
+    <p id="delete-modal-message" style="margin:0 0 20px 0;"></p>
+    <div style="display:flex; gap:12px; justify-content:flex-end;">
+      <button type="button" id="delete-modal-cancel" onclick="closeDeleteModal()" style="background:#f0f0f0; border-color:#ccc;">Cancel</button>
+      <button type="button" id="delete-modal-confirm" style="background:#c00; color:#fff; border-color:#a00;">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  var pendingDeleteForm = null;
+  var deleteModalTrigger = null;
+  function openDeleteModal(form, title) {
+    pendingDeleteForm = form;
+    deleteModalTrigger = document.activeElement;
+    document.getElementById('delete-modal-message').textContent =
+      'Are you sure you want to delete the session "' + title + '"? This cannot be undone.';
+    var modal = document.getElementById('delete-modal');
+    modal.style.display = 'flex';
+    document.getElementById('delete-modal-cancel').focus();
+  }
+  function closeDeleteModal() {
+    pendingDeleteForm = null;
+    document.getElementById('delete-modal').style.display = 'none';
+    if (deleteModalTrigger) { deleteModalTrigger.focus(); deleteModalTrigger = null; }
+  }
+  document.getElementById('delete-modal-confirm').addEventListener('click', function() {
+    if (pendingDeleteForm) {
+      var form = pendingDeleteForm;
+      closeDeleteModal();
+      form.submit();
+    }
+  });
+  document.getElementById('delete-modal').addEventListener('click', function(e) {
+    if (e.target === this) { closeDeleteModal(); }
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && document.getElementById('delete-modal').style.display === 'flex') {
+      closeDeleteModal();
+    }
+  });
+</script>
 <div class="card">
   <h3>Change Password</h3>
   {% if pw_error %}<div class="pill warn" style="margin-bottom:8px;">{{ pw_error }}</div>{% endif %}
@@ -78,8 +124,8 @@
           </td>
           <td><a href="/admin/{{ s.id }}">Manage</a></td>
           <td>
-            <form method="post" action="/admin/{{ s.id }}/delete" onsubmit="return confirm({{ ('Are you sure you want to delete the session \"%s\"? This cannot be undone.' % s.title)|tojson }});">
-              <button type="submit">Delete</button>
+            <form method="post" action="/admin/{{ s.id }}/delete">
+              <button type="button" onclick='openDeleteModal(this.form, {{ s.title|tojson }})'>Delete</button>
             </form>
           </td>
         </tr>
