@@ -382,13 +382,20 @@ def clear_whitelist(session_id: str) -> None:
 
 def delete_session(session_id: str) -> None:
     conn = db()
-    conn.execute("DELETE FROM contributions WHERE session_id=?", (session_id,))
-    conn.execute("DELETE FROM results WHERE session_id=?", (session_id,))
-    conn.execute("DELETE FROM students WHERE session_id=?", (session_id,))
-    conn.execute("DELETE FROM whitelist WHERE session_id=?", (session_id,))
-    conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
-    conn.commit()
-    conn.close()
+    try:
+        # Start an explicit transaction to ensure all deletes are atomic.
+        conn.execute("BEGIN")
+        conn.execute("DELETE FROM contributions WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM results WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM students WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM whitelist WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+        conn.commit()
+    except sqlite3.Error:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def whitelist_check_or_raise(session_id: str, student_id: str, name: str) -> None:
