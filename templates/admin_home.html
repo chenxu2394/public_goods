@@ -65,7 +65,7 @@
     <div class="muted">No sessions yet. Create one first.</div>
   {% else %}
     <table>
-      <tr><th>Created at</th><th>Title</th><th>Parameters</th><th>Status</th><th>Open</th></tr>
+      <tr><th>Created at</th><th>Title</th><th>Parameters</th><th>Status</th><th>Open</th><th>Delete</th></tr>
       {% for s in sessions %}
         <tr>
           <td class="mono">{{ s.created_at }}</td>
@@ -77,6 +77,11 @@
             <span class="pill">Current round {{ s.current_round }}</span>
           </td>
           <td><a href="/admin/{{ s.id }}">Manage</a></td>
+          <td>
+            <form method="post" action="/admin/{{ s.id }}/delete" onsubmit="return confirm('Are you sure you want to delete the session &quot;{{ s.title }}&quot;? This cannot be undone.');">
+              <button type="submit">Delete</button>
+            </form>
+          </td>
         </tr>
       {% endfor %}
     </table>

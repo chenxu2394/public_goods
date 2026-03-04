@@ -380,6 +380,17 @@ def clear_whitelist(session_id: str) -> None:
     conn.close()
 
 
+def delete_session(session_id: str) -> None:
+    conn = db()
+    conn.execute("DELETE FROM contributions WHERE session_id=?", (session_id,))
+    conn.execute("DELETE FROM results WHERE session_id=?", (session_id,))
+    conn.execute("DELETE FROM students WHERE session_id=?", (session_id,))
+    conn.execute("DELETE FROM whitelist WHERE session_id=?", (session_id,))
+    conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+    conn.commit()
+    conn.close()
+
+
 def whitelist_check_or_raise(session_id: str, student_id: str, name: str) -> None:
     conn = db()
     total = conn.execute(
@@ -896,6 +907,17 @@ def admin_whitelist_clear(request: Request, session_id: str):
     _ = get_session(session_id)
     clear_whitelist(session_id)
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
+
+
+@app.post("/admin/{session_id}/delete")
+def admin_delete_session(request: Request, session_id: str):
+    gate = _admin_gate(request)
+    if gate:
+        return gate
+
+    _ = get_session(session_id)
+    delete_session(session_id)
+    return RedirectResponse(url="/admin", status_code=303)
 
 
 # ---------------- Student ----------------
