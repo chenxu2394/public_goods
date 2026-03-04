@@ -10,6 +10,8 @@ import base64
 import json
 import hmac
 import hashlib
+import random
+import math
 from typing import List, Dict, Tuple, Optional
 
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
@@ -36,6 +38,22 @@ ADMIN_COOKIE_SECURE = os.environ.get("ADMIN_COOKIE_SECURE", "1").strip().lower()
 
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://public-goods.azurewebsites.net").rstrip("/")
 
+PHASE_ROUNDS = 10
+PHASES = ("baseline", "reward", "punishment")
+PHASE_LABELS = {
+    "baseline": "Baseline",
+    "reward": "Reward",
+    "punishment": "Punishment",
+}
+TOTAL_EXPERIMENT_ROUNDS = PHASE_ROUNDS * len(PHASES)
+MIN_GROUP_SIZE = 3
+MAX_GROUP_SIZE = 7
+DEFAULT_GROUP_SIZE = 5
+
+ACTION_COST = 1.0
+REWARD_EFFECT = 2.0
+PUNISH_EFFECT = 3.0
+
 app = FastAPI(title="Public Goods Experiment (Azure + Whitelist + Admin Password)")
 templates = Jinja2Templates(directory=os.path.join(APP_DIR, "templates"))
 
@@ -50,15 +68,112 @@ def now_iso() -> str:
     return dt.datetime.now().isoformat(timespec="seconds")
 
 
+def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, col_name: str, col_type_expr: str) -> None:
+    cols = _column_names(conn, table)
+    if col_name not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type_expr}")
+
+
 def _migrate_student_identifier_columns(conn: sqlite3.Connection) -> None:
     # Backward compatibility for existing DBs that still use student_code.
     for table in ("students", "whitelist"):
-        cols = {
-            r["name"]
-            for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
-        }
+        cols = _column_names(conn, table)
         if "student_code" in cols and "student_id" not in cols:
             conn.execute(f"ALTER TABLE {table} RENAME COLUMN student_code TO student_id")
+
+
+def _generate_anonymous_id(existing: set[str]) -> str:
+    letters = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+    digits = "23456789"
+
+    for _ in range(1000):
+        code = f"{secrets.choice(letters)}{secrets.choice(digits)}"
+        if code not in existing:
+            return code
+
+    while True:
+        code = f"{secrets.choice(letters)}{secrets.choice(digits)}{secrets.choice(letters)}"
+        if code not in existing:
+            return code
+
+
+def _backfill_anonymous_ids(conn: sqlite3.Connection) -> None:
+    sessions = conn.execute("SELECT DISTINCT session_id FROM students").fetchall()
+    for session_row in sessions:
+        session_id = session_row["session_id"]
+        students = conn.execute(
+            "SELECT id, anonymous_id FROM students WHERE session_id=? ORDER BY joined_at ASC",
+            (session_id,),
+        ).fetchall()
+        used = {s["anonymous_id"] for s in students if s["anonymous_id"]}
+        updates = []
+        for s in students:
+            if s["anonymous_id"]:
+                continue
+            aid = _generate_anonymous_id(used)
+            used.add(aid)
+            updates.append((aid, s["id"]))
+        if updates:
+            conn.executemany("UPDATE students SET anonymous_id=? WHERE id=?", updates)
+
+
+def phase_for_round(round_no: int) -> Tuple[str, int]:
+    if round_no <= PHASE_ROUNDS:
+        return "baseline", round_no
+    if round_no <= PHASE_ROUNDS * 2:
+        return "reward", round_no - PHASE_ROUNDS
+    return "punishment", max(1, round_no - PHASE_ROUNDS * 2)
+
+
+def phase_start_round(phase: str) -> int:
+    if phase == "baseline":
+        return 1
+    if phase == "reward":
+        return PHASE_ROUNDS + 1
+    if phase == "punishment":
+        return PHASE_ROUNDS * 2 + 1
+    raise HTTPException(400, "Invalid phase")
+
+
+def stage_of_session(sess: sqlite3.Row) -> str:
+    if int(sess["action_open"]) == 1:
+        return "action"
+    if int(sess["round_open"]) == 1:
+        return "contribution"
+    return "closed"
+
+
+def phase_label(phase: str) -> str:
+    return PHASE_LABELS.get(phase, phase.title())
+
+
+def round_context(sess: sqlite3.Row) -> Dict[str, object]:
+    cur = int(sess["current_round"])
+    phase, phase_round = phase_for_round(cur)
+    stage = stage_of_session(sess)
+
+    if stage == "contribution":
+        if phase == "baseline":
+            close_label = "Close contribution and compute round"
+        else:
+            close_label = f"Close contribution and open {phase_label(phase)} stage"
+    elif stage == "action":
+        close_label = f"Close {phase_label(phase)} stage and compute round"
+    else:
+        close_label = "Round is closed (open current round first)"
+
+    return {
+        "round": cur,
+        "phase": phase,
+        "phase_label": phase_label(phase),
+        "phase_round": phase_round,
+        "stage": stage,
+        "close_label": close_label,
+    }
 
 
 def init_db():
@@ -77,7 +192,8 @@ def init_db():
         created_at TEXT NOT NULL,
         locked INTEGER NOT NULL DEFAULT 0,
         current_round INTEGER NOT NULL DEFAULT 1,
-        round_open INTEGER NOT NULL DEFAULT 0
+        round_open INTEGER NOT NULL DEFAULT 0,
+        action_open INTEGER NOT NULL DEFAULT 0
     )
     """
     )
@@ -89,6 +205,7 @@ def init_db():
         session_id TEXT NOT NULL,
         student_id TEXT NOT NULL,
         name TEXT NOT NULL,
+        anonymous_id TEXT,
         joined_at TEXT NOT NULL,
         group_no INTEGER,
         group_pos INTEGER,
@@ -127,6 +244,21 @@ def init_db():
 
     cur.execute(
         """
+    CREATE TABLE IF NOT EXISTS actions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        round_no INTEGER NOT NULL,
+        actor_student_id TEXT NOT NULL,
+        target_student_id TEXT NOT NULL,
+        points INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(session_id, round_no, actor_student_id, target_student_id)
+    )
+    """
+    )
+
+    cur.execute(
+        """
     CREATE TABLE IF NOT EXISTS results(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id TEXT NOT NULL,
@@ -136,6 +268,13 @@ def init_db():
         group_n INTEGER NOT NULL,
         group_total INTEGER NOT NULL,
         public_return REAL NOT NULL,
+        contrib INTEGER NOT NULL DEFAULT 0,
+        phase TEXT NOT NULL DEFAULT 'baseline',
+        phase_round INTEGER NOT NULL DEFAULT 1,
+        action_sent INTEGER NOT NULL DEFAULT 0,
+        action_received INTEGER NOT NULL DEFAULT 0,
+        action_cost REAL NOT NULL DEFAULT 0,
+        action_effect REAL NOT NULL DEFAULT 0,
         income REAL NOT NULL,
         cumulative REAL NOT NULL,
         computed_at TEXT NOT NULL,
@@ -154,6 +293,19 @@ def init_db():
     )
 
     _migrate_student_identifier_columns(conn)
+
+    _ensure_column(conn, "sessions", "action_open", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "students", "anonymous_id", "TEXT")
+
+    _ensure_column(conn, "results", "contrib", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "results", "phase", "TEXT NOT NULL DEFAULT 'baseline'")
+    _ensure_column(conn, "results", "phase_round", "INTEGER NOT NULL DEFAULT 1")
+    _ensure_column(conn, "results", "action_sent", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "results", "action_received", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "results", "action_cost", "REAL NOT NULL DEFAULT 0")
+    _ensure_column(conn, "results", "action_effect", "REAL NOT NULL DEFAULT 0")
+
+    _backfill_anonymous_ids(conn)
 
     conn.commit()
     conn.close()
@@ -287,7 +439,7 @@ def list_students(session_id: str) -> List[sqlite3.Row]:
         """
         SELECT * FROM students
         WHERE session_id=?
-        ORDER BY joined_at ASC
+        ORDER BY group_no ASC, group_pos ASC, joined_at ASC
     """,
         (session_id,),
     ).fetchall()
@@ -315,6 +467,22 @@ def ensure_int(value: str, min_v: int, max_v: int, field: str) -> int:
     if v < min_v or v > max_v:
         raise HTTPException(400, f"{field} must be between {min_v} and {max_v}")
     return v
+
+
+def next_round_after_compute(current_round: int, rounds: int) -> int:
+    if current_round >= rounds:
+        return rounds
+    return current_round + 1
+
+
+def count_computed_rounds(session_id: str) -> int:
+    conn = db()
+    c = conn.execute(
+        "SELECT COUNT(DISTINCT round_no) AS c FROM results WHERE session_id=?",
+        (session_id,),
+    ).fetchone()["c"]
+    conn.close()
+    return int(c or 0)
 
 
 # ---------------- Whitelist ----------------
@@ -385,6 +553,7 @@ def delete_session(session_id: str) -> None:
     try:
         # Start an explicit transaction to ensure all deletes are atomic.
         conn.execute("BEGIN")
+        conn.execute("DELETE FROM actions WHERE session_id=?", (session_id,))
         conn.execute("DELETE FROM contributions WHERE session_id=?", (session_id,))
         conn.execute("DELETE FROM results WHERE session_id=?", (session_id,))
         conn.execute("DELETE FROM students WHERE session_id=?", (session_id,))
@@ -424,6 +593,44 @@ def whitelist_check_or_raise(session_id: str, student_id: str, name: str) -> Non
 
 # ---------------- Grouping ----------------
 
+def _choose_group_sizes(total: int, preferred_size: int) -> List[int]:
+    if total <= 0:
+        return []
+    if total < MIN_GROUP_SIZE:
+        return [total]
+    if total <= MAX_GROUP_SIZE:
+        return [total]
+
+    preferred = max(MIN_GROUP_SIZE, min(MAX_GROUP_SIZE, int(preferred_size or DEFAULT_GROUP_SIZE)))
+    min_groups = math.ceil(total / MAX_GROUP_SIZE)
+    max_groups = max(min_groups, total // MIN_GROUP_SIZE)
+
+    best_sizes: Optional[List[int]] = None
+    best_score: Optional[Tuple[float, int]] = None
+    target_groups = max(1, round(total / preferred))
+
+    for g in range(min_groups, max_groups + 1):
+        base = total // g
+        rem = total % g
+        sizes = [base + 1 if i < rem else base for i in range(g)]
+        if min(sizes) < MIN_GROUP_SIZE or max(sizes) > MAX_GROUP_SIZE:
+            continue
+
+        score = (abs((total / g) - preferred), abs(g - target_groups))
+        if best_score is None or score < best_score:
+            best_score = score
+            best_sizes = sizes
+
+    if best_sizes is not None:
+        return best_sizes
+
+    # Fallback: near preferred size, relax the lower-bound for very small remainder edge cases.
+    g = max(1, round(total / preferred))
+    base = total // g
+    rem = total % g
+    return [base + 1 if i < rem else base for i in range(g)]
+
+
 def lock_groups(session_id: str, group_size: int):
     conn = db()
     students = conn.execute(
@@ -436,16 +643,20 @@ def lock_groups(session_id: str, group_size: int):
     ).fetchall()
     ids = [r["id"] for r in students]
 
-    import random
     random.shuffle(ids)
+    sizes = _choose_group_sizes(len(ids), group_size)
 
     updates = []
-    for idx, sid in enumerate(ids):
-        group_no = idx // group_size + 1
-        group_pos = idx % group_size + 1
-        updates.append((group_no, group_pos, sid))
+    idx = 0
+    for group_no, size in enumerate(sizes, start=1):
+        for pos in range(1, size + 1):
+            if idx >= len(ids):
+                break
+            updates.append((group_no, pos, ids[idx]))
+            idx += 1
 
-    conn.executemany("UPDATE students SET group_no=?, group_pos=? WHERE id=?", updates)
+    if updates:
+        conn.executemany("UPDATE students SET group_no=?, group_pos=? WHERE id=?", updates)
     conn.execute("UPDATE sessions SET locked=1 WHERE id=?", (session_id,))
     conn.commit()
     conn.close()
@@ -470,41 +681,34 @@ def assign_late_joiner(session_id: str) -> None:
         conn.close()
         return
 
-    group_size = int(sess["group_size"])
-    last_group = conn.execute(
+    max_group_row = conn.execute(
         """
         SELECT MAX(group_no) AS g FROM students
         WHERE session_id=? AND group_no IS NOT NULL
     """,
         (session_id,),
-    ).fetchone()["g"]
-    if last_group is None:
-        last_group = 1
+    ).fetchone()
+    group_no = int(max_group_row["g"] or 1)
 
-    last_count = conn.execute(
+    count_row = conn.execute(
         """
         SELECT COUNT(*) AS c FROM students
         WHERE session_id=? AND group_no=?
     """,
-        (session_id, last_group),
-    ).fetchone()["c"]
-    last_count = int(last_count)
-
-    if last_count >= group_size:
-        last_group = int(last_group) + 1
-        pos = 1
-    else:
-        pos = last_count + 1
+        (session_id, group_no),
+    ).fetchone()
+    current_count = int(count_row["c"])
 
     updates = []
-    for r in late:
-        updates.append((last_group, pos, r["id"]))
-        pos += 1
-        if pos > group_size:
-            last_group += 1
-            pos = 1
+    for row in late:
+        if current_count >= MAX_GROUP_SIZE:
+            group_no += 1
+            current_count = 0
+        current_count += 1
+        updates.append((group_no, current_count, row["id"]))
 
-    conn.executemany("UPDATE students SET group_no=?, group_pos=? WHERE id=?", updates)
+    if updates:
+        conn.executemany("UPDATE students SET group_no=?, group_pos=? WHERE id=?", updates)
     conn.commit()
     conn.close()
 
@@ -514,7 +718,7 @@ def assign_late_joiner(session_id: str) -> None:
 def open_round(session_id: str, round_no: int):
     conn = db()
     conn.execute(
-        "UPDATE sessions SET current_round=?, round_open=1 WHERE id=?",
+        "UPDATE sessions SET current_round=?, round_open=1, action_open=0 WHERE id=?",
         (round_no, session_id),
     )
     conn.commit()
@@ -523,7 +727,25 @@ def open_round(session_id: str, round_no: int):
 
 def close_round(session_id: str):
     conn = db()
-    conn.execute("UPDATE sessions SET round_open=0 WHERE id=?", (session_id,))
+    conn.execute("UPDATE sessions SET round_open=0, action_open=0 WHERE id=?", (session_id,))
+    conn.commit()
+    conn.close()
+
+
+def open_action_stage(session_id: str):
+    conn = db()
+    conn.execute("UPDATE sessions SET round_open=0, action_open=1 WHERE id=?", (session_id,))
+    conn.commit()
+    conn.close()
+
+
+def advance_round(session_id: str, current_round: int, rounds: int) -> None:
+    nxt = next_round_after_compute(current_round, rounds)
+    conn = db()
+    conn.execute(
+        "UPDATE sessions SET current_round=?, round_open=0, action_open=0 WHERE id=?",
+        (nxt, session_id),
+    )
     conn.commit()
     conn.close()
 
@@ -537,13 +759,15 @@ def compute_results(session_id: str, round_no: int):
 
     multiplier = float(sess["multiplier"])
     endowment = int(sess["endowment"])
+    phase, phase_round = phase_for_round(round_no)
 
     if int(sess["locked"]) == 1:
         assign_late_joiner(session_id)
 
     students = conn.execute(
         """
-        SELECT id, group_no FROM students
+        SELECT id, group_no
+        FROM students
         WHERE session_id=? AND group_no IS NOT NULL
         ORDER BY group_no ASC, group_pos ASC
     """,
@@ -561,10 +785,13 @@ def compute_results(session_id: str, round_no: int):
 
     group_totals: Dict[int, int] = {}
     group_ns: Dict[int, int] = {}
+    student_group: Dict[str, int] = {}
     for s in students:
         g = int(s["group_no"])
+        sid = s["id"]
+        student_group[sid] = g
         group_ns[g] = group_ns.get(g, 0) + 1
-        group_totals[g] = group_totals.get(g, 0) + contrib.get(s["id"], 0)
+        group_totals[g] = group_totals.get(g, 0) + contrib.get(sid, 0)
 
     prev = conn.execute(
         """
@@ -575,6 +802,30 @@ def compute_results(session_id: str, round_no: int):
     ).fetchall()
     prev_cum = {r["student_id"]: float(r["cumulative"]) for r in prev}
 
+    action_sent: Dict[str, int] = {}
+    action_received: Dict[str, int] = {}
+    if phase in ("reward", "punishment"):
+        action_rows = conn.execute(
+            """
+            SELECT actor_student_id, target_student_id, points
+            FROM actions
+            WHERE session_id=? AND round_no=?
+        """,
+            (session_id, round_no),
+        ).fetchall()
+        for row in action_rows:
+            actor = row["actor_student_id"]
+            target = row["target_student_id"]
+            points = int(row["points"])
+            if points <= 0 or actor == target:
+                continue
+            if actor not in student_group or target not in student_group:
+                continue
+            if student_group[actor] != student_group[target]:
+                continue
+            action_sent[actor] = action_sent.get(actor, 0) + points
+            action_received[target] = action_received.get(target, 0) + points
+
     computed_at = now_iso()
     out_rows = []
     for s in students:
@@ -584,20 +835,67 @@ def compute_results(session_id: str, round_no: int):
         gn = int(group_ns[g])
         pr = multiplier * gt / gn if gn > 0 else 0.0
         c_i = contrib.get(sid, 0)
-        income = endowment - c_i + pr
+
+        base_income = endowment - c_i + pr
+        sent = action_sent.get(sid, 0)
+        received = action_received.get(sid, 0)
+
+        if phase == "reward":
+            action_cost = ACTION_COST * sent
+            action_effect = REWARD_EFFECT * received
+        elif phase == "punishment":
+            action_cost = ACTION_COST * sent
+            action_effect = -PUNISH_EFFECT * received
+        else:
+            action_cost = 0.0
+            action_effect = 0.0
+
+        income = base_income - action_cost + action_effect
         cumulative = prev_cum.get(sid, 0.0) + income
-        out_rows.append((session_id, round_no, sid, g, gn, gt, pr, income, cumulative, computed_at))
+
+        out_rows.append(
+            (
+                session_id,
+                round_no,
+                sid,
+                g,
+                gn,
+                gt,
+                pr,
+                c_i,
+                phase,
+                phase_round,
+                sent,
+                received,
+                action_cost,
+                action_effect,
+                income,
+                cumulative,
+                computed_at,
+            )
+        )
 
     conn.executemany(
         """
-        INSERT INTO results(session_id, round_no, student_id, group_no, group_n, group_total, public_return, income, cumulative, computed_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO results(
+            session_id, round_no, student_id, group_no, group_n, group_total,
+            public_return, contrib, phase, phase_round, action_sent, action_received,
+            action_cost, action_effect, income, cumulative, computed_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(session_id, round_no, student_id)
         DO UPDATE SET
             group_no=excluded.group_no,
             group_n=excluded.group_n,
             group_total=excluded.group_total,
             public_return=excluded.public_return,
+            contrib=excluded.contrib,
+            phase=excluded.phase,
+            phase_round=excluded.phase_round,
+            action_sent=excluded.action_sent,
+            action_received=excluded.action_received,
+            action_cost=excluded.action_cost,
+            action_effect=excluded.action_effect,
             income=excluded.income,
             cumulative=excluded.cumulative,
             computed_at=excluded.computed_at
@@ -690,6 +988,7 @@ def admin_change_password(
     resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
     return resp
 
+
 # ---------------- Admin pages ----------------
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -705,17 +1004,17 @@ def admin_home(request: Request):
 def admin_create_session(
     request: Request,
     title: str = Form(...),
-    group_size: int = Form(5),
+    group_size: int = Form(DEFAULT_GROUP_SIZE),
     multiplier: float = Form(1.5),
     endowment: int = Form(10),
-    rounds: int = Form(10),
+    rounds: int = Form(TOTAL_EXPERIMENT_ROUNDS),
 ):
     gate = _admin_gate(request)
     if gate:
         return gate
 
-    if group_size < 2 or group_size > 20:
-        raise HTTPException(400, "group_size must be 2..20")
+    if group_size < MIN_GROUP_SIZE or group_size > MAX_GROUP_SIZE:
+        raise HTTPException(400, f"group_size must be {MIN_GROUP_SIZE}..{MAX_GROUP_SIZE}")
     if multiplier <= 0 or multiplier > 10:
         raise HTTPException(400, "multiplier must be >0 and <=10")
     if endowment < 1 or endowment > 100:
@@ -727,10 +1026,10 @@ def admin_create_session(
     conn = db()
     conn.execute(
         """
-        INSERT INTO sessions(id, title, group_size, multiplier, endowment, rounds, created_at, locked, current_round, round_open)
-        VALUES(?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO sessions(id, title, group_size, multiplier, endowment, rounds, created_at, locked, current_round, round_open, action_open)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
     """,
-        (session_id, title, group_size, multiplier, endowment, rounds, now_iso(), 0, 1, 0),
+        (session_id, title, group_size, multiplier, endowment, rounds, now_iso(), 0, 1, 0, 0),
     )
     conn.commit()
     conn.close()
@@ -750,6 +1049,10 @@ def admin_panel(request: Request, session_id: str):
     join_url = f"{PUBLIC_BASE_URL}/join/{session_id}"
     export_url = f"{PUBLIC_BASE_URL}/admin/{session_id}/export"
     template_url = f"{PUBLIC_BASE_URL}/admin/{session_id}/whitelist/template"
+    display_url = f"{PUBLIC_BASE_URL}/display/{session_id}"
+
+    ctx = round_context(sess)
+    computed_rounds = count_computed_rounds(session_id)
 
     return templates.TemplateResponse(
         "admin_panel.html",
@@ -761,6 +1064,9 @@ def admin_panel(request: Request, session_id: str):
             "join_url": join_url,
             "export_url": export_url,
             "template_url": template_url,
+            "display_url": display_url,
+            "round_ctx": ctx,
+            "computed_rounds": computed_rounds,
         },
     )
 
@@ -777,16 +1083,61 @@ def admin_lock(request: Request, session_id: str):
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
 
 
+@app.post("/admin/{session_id}/switch_phase")
+def admin_switch_phase(request: Request, session_id: str, phase: str = Form(...)):
+    gate = _admin_gate(request)
+    if gate:
+        return gate
+
+    phase = phase.strip().lower()
+    if phase not in PHASES:
+        raise HTTPException(400, "invalid phase")
+
+    sess = get_session(session_id)
+    rounds = int(sess["rounds"])
+    start = phase_start_round(phase)
+    if start > rounds:
+        raise HTTPException(400, f"This session has only {rounds} rounds; phase {phase} is unavailable.")
+    end = min(rounds, start + PHASE_ROUNDS - 1)
+
+    conn = db()
+    row = conn.execute(
+        "SELECT MAX(round_no) AS r FROM results WHERE session_id=? AND round_no BETWEEN ? AND ?",
+        (session_id, start, end),
+    ).fetchone()
+    max_done = row["r"]
+
+    if max_done is None:
+        target_round = start
+    else:
+        target_round = min(end, int(max_done) + 1)
+
+    conn.execute(
+        "UPDATE sessions SET current_round=?, round_open=0, action_open=0 WHERE id=?",
+        (target_round, session_id),
+    )
+    conn.commit()
+    conn.close()
+    return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
+
+
 @app.post("/admin/{session_id}/open_round")
-def admin_open_round(request: Request, session_id: str, round_no: int = Form(...)):
+def admin_open_round(request: Request, session_id: str, round_no: Optional[int] = Form(None)):
     gate = _admin_gate(request)
     if gate:
         return gate
 
     sess = get_session(session_id)
+    if int(sess["locked"]) != 1:
+        raise HTTPException(400, "Please lock groups before opening rounds.")
+
+    if round_no is None:
+        round_no = int(sess["current_round"])
+
     round_no = int(round_no)
     if round_no < 1 or round_no > int(sess["rounds"]):
         raise HTTPException(400, "invalid round")
+
     open_round(session_id, round_no)
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
 
@@ -798,9 +1149,22 @@ def admin_close_and_compute(request: Request, session_id: str):
         return gate
 
     sess = get_session(session_id)
+    stage = stage_of_session(sess)
     round_no = int(sess["current_round"])
+    rounds = int(sess["rounds"])
+    phase, _ = phase_for_round(round_no)
+
+    if stage == "closed":
+        raise HTTPException(400, "Round is already closed. Open it first.")
+
+    if stage == "contribution" and phase in ("reward", "punishment"):
+        open_action_stage(session_id)
+        return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
+
+    # baseline contribution close, or reward/punishment action close
     close_round(session_id)
     compute_results(session_id, round_no)
+    advance_round(session_id, round_no, rounds)
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
 
 
@@ -814,7 +1178,7 @@ def admin_export(request: Request, session_id: str):
     conn = db()
     students = conn.execute(
         """
-        SELECT id, student_id, name, group_no
+        SELECT id, anonymous_id, student_id, name, group_no
         FROM students
         WHERE session_id=?
         ORDER BY group_no ASC, group_pos ASC, joined_at ASC
@@ -824,41 +1188,79 @@ def admin_export(request: Request, session_id: str):
 
     rounds = int(sess["rounds"])
 
-    contrib = conn.execute(
+    contrib_rows = conn.execute(
         "SELECT round_no, student_id, contrib FROM contributions WHERE session_id=?",
         (session_id,),
     ).fetchall()
-    contrib_map = {(int(r["round_no"]), r["student_id"]): int(r["contrib"]) for r in contrib}
+    contrib_map = {(int(r["round_no"]), r["student_id"]): int(r["contrib"]) for r in contrib_rows}
 
-    res = conn.execute(
+    result_rows = conn.execute(
         """
-        SELECT round_no, student_id, group_n, group_total, public_return, income, cumulative
+        SELECT round_no, student_id, phase, phase_round, income, cumulative, action_sent, action_received
         FROM results
         WHERE session_id=?
     """,
         (session_id,),
     ).fetchall()
-    res_map = {(int(r["round_no"]), r["student_id"]): r for r in res}
+    result_map = {(int(r["round_no"]), r["student_id"]): r for r in result_rows}
     conn.close()
 
     output = io.StringIO()
     w = csv.writer(output)
 
-    header = ["student_id", "name", "group_no"]
-    for r in range(1, rounds + 1):
-        header += [f"r{r}_contrib", f"r{r}_group_n", f"r{r}_group_total", f"r{r}_public_return", f"r{r}_income", f"r{r}_cumulative"]
-    w.writerow(header)
+    w.writerow(
+        [
+            "experiment_id",
+            "anonymous_id",
+            "student_id",
+            "name",
+            "phase",
+            "phase_round",
+            "round_no",
+            "contribution",
+            "income",
+            "cumulative",
+            "action_sent",
+            "action_received",
+        ]
+    )
 
     for s in students:
-        row = [s["student_id"], s["name"], s["group_no"]]
         for r in range(1, rounds + 1):
-            c = contrib_map.get((r, s["id"]), "")
-            rr = res_map.get((r, s["id"]))
+            default_phase, default_phase_round = phase_for_round(r)
+            contrib = contrib_map.get((r, s["id"]), "")
+            rr = result_map.get((r, s["id"]))
             if rr:
-                row += [c, rr["group_n"], rr["group_total"], rr["public_return"], rr["income"], rr["cumulative"]]
+                phase = rr["phase"]
+                phase_round = rr["phase_round"]
+                income = rr["income"]
+                cumulative = rr["cumulative"]
+                action_sent = rr["action_sent"]
+                action_received = rr["action_received"]
             else:
-                row += [c, "", "", "", "", ""]
-        w.writerow(row)
+                phase = default_phase
+                phase_round = default_phase_round
+                income = ""
+                cumulative = ""
+                action_sent = ""
+                action_received = ""
+
+            w.writerow(
+                [
+                    session_id,
+                    s["anonymous_id"],
+                    s["student_id"],
+                    s["name"],
+                    phase,
+                    phase_round,
+                    r,
+                    contrib,
+                    income,
+                    cumulative,
+                    action_sent,
+                    action_received,
+                ]
+            )
 
     data = output.getvalue().encode("utf-8-sig")
     filename = f"public_goods_{session_id}.csv"
@@ -948,20 +1350,36 @@ def join_submit(session_id: str, student_id: str = Form(...), name: str = Form(.
 
     conn = db()
     existing = conn.execute(
-        "SELECT id FROM students WHERE session_id=? AND student_id=?",
+        "SELECT id, anonymous_id FROM students WHERE session_id=? AND student_id=?",
         (session_id, student_id),
     ).fetchone()
+
     if existing:
         sid = existing["id"]
-        conn.execute("UPDATE students SET name=? WHERE id=?", (name, sid))
+        if existing["anonymous_id"]:
+            conn.execute("UPDATE students SET name=? WHERE id=?", (name, sid))
+        else:
+            used_ids = {
+                r["anonymous_id"]
+                for r in conn.execute("SELECT anonymous_id FROM students WHERE session_id=?", (session_id,)).fetchall()
+                if r["anonymous_id"]
+            }
+            anonymous_id = _generate_anonymous_id(used_ids)
+            conn.execute("UPDATE students SET name=?, anonymous_id=? WHERE id=?", (name, anonymous_id, sid))
     else:
+        used_ids = {
+            r["anonymous_id"]
+            for r in conn.execute("SELECT anonymous_id FROM students WHERE session_id=?", (session_id,)).fetchall()
+            if r["anonymous_id"]
+        }
+        anonymous_id = _generate_anonymous_id(used_ids)
         sid = secrets.token_urlsafe(8)
         conn.execute(
             """
-            INSERT INTO students(id, session_id, student_id, name, joined_at, group_no, group_pos)
-            VALUES(?,?,?,?,?,?,?)
+            INSERT INTO students(id, session_id, student_id, name, anonymous_id, joined_at, group_no, group_pos)
+            VALUES(?,?,?,?,?,?,?,?)
         """,
-            (sid, session_id, student_id, name, now_iso(), None, None),
+            (sid, session_id, student_id, name, anonymous_id, now_iso(), None, None),
         )
     conn.commit()
     conn.close()
@@ -989,8 +1407,8 @@ def student_page(request: Request, session_id: str, student_id: str):
 @app.post("/api/{session_id}/submit")
 def api_submit(session_id: str, student_id: str = Form(...), contrib: str = Form(...)):
     sess = get_session(session_id)
-    if int(sess["round_open"]) != 1:
-        raise HTTPException(400, "Round is not open")
+    if int(sess["round_open"]) != 1 or int(sess["action_open"]) == 1:
+        raise HTTPException(400, "Contribution stage is not open")
 
     c = ensure_int(contrib, 0, int(sess["endowment"]), "contrib")
 
@@ -1019,6 +1437,84 @@ def api_submit(session_id: str, student_id: str = Form(...), contrib: str = Form
     return {"ok": True, "round": round_no, "contrib": c}
 
 
+@app.post("/api/{session_id}/submit_actions")
+async def api_submit_actions(session_id: str, request: Request):
+    sess = get_session(session_id)
+    if int(sess["action_open"]) != 1:
+        raise HTTPException(400, "Action stage is not open")
+
+    round_no = int(sess["current_round"])
+    phase, _ = phase_for_round(round_no)
+    if phase not in ("reward", "punishment"):
+        raise HTTPException(400, "Current round has no reward/punishment stage")
+
+    payload = await request.json()
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "invalid payload")
+
+    student_id = str(payload.get("student_id", "")).strip()
+    allocations = payload.get("allocations")
+    if not student_id:
+        raise HTTPException(400, "student_id required")
+    if not isinstance(allocations, dict):
+        raise HTTPException(400, "allocations must be an object")
+
+    conn = db()
+    stu = conn.execute(
+        "SELECT id, group_no FROM students WHERE session_id=? AND student_id=?",
+        (session_id, student_id),
+    ).fetchone()
+    if not stu:
+        conn.close()
+        raise HTTPException(404, "student not found")
+    if stu["group_no"] is None:
+        conn.close()
+        raise HTTPException(400, "group not assigned")
+
+    targets = conn.execute(
+        """
+        SELECT id, anonymous_id
+        FROM students
+        WHERE session_id=? AND group_no=? AND id<>?
+        ORDER BY group_pos ASC, joined_at ASC
+    """,
+        (session_id, int(stu["group_no"]), stu["id"]),
+    ).fetchall()
+
+    target_by_anon = {t["anonymous_id"]: t["id"] for t in targets}
+
+    rows_to_insert = []
+    for anon_id, target_id in target_by_anon.items():
+        raw_points = allocations.get(anon_id, 0)
+        points = ensure_int(str(raw_points), 0, 10, f"points[{anon_id}]")
+        if points > 0:
+            rows_to_insert.append((session_id, round_no, stu["id"], target_id, points, now_iso()))
+
+    conn.execute(
+        "DELETE FROM actions WHERE session_id=? AND round_no=? AND actor_student_id=?",
+        (session_id, round_no, stu["id"]),
+    )
+
+    if rows_to_insert:
+        conn.executemany(
+            """
+            INSERT INTO actions(session_id, round_no, actor_student_id, target_student_id, points, created_at)
+            VALUES(?,?,?,?,?,?)
+        """,
+            rows_to_insert,
+        )
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "ok": True,
+        "round": round_no,
+        "phase": phase,
+        "targets_submitted": len(rows_to_insert),
+    }
+
+
 @app.get("/api/{session_id}/status")
 def api_status(session_id: str, student_id: str):
     sess = get_session(session_id)
@@ -1033,7 +1529,9 @@ def api_status(session_id: str, student_id: str):
 
     rows = conn.execute(
         """
-        SELECT round_no, group_no, group_n, group_total, public_return, income, cumulative, computed_at
+        SELECT round_no, phase, phase_round, group_no, group_n, group_total,
+               public_return, contrib, action_sent, action_received, action_cost,
+               action_effect, income, cumulative, computed_at
         FROM results
         WHERE session_id=? AND student_id=?
         ORDER BY round_no ASC
@@ -1042,6 +1540,9 @@ def api_status(session_id: str, student_id: str):
     ).fetchall()
 
     cur_r = int(sess["current_round"])
+    phase, phase_round = phase_for_round(cur_r)
+    stage = stage_of_session(sess)
+
     cur_c = conn.execute(
         """
         SELECT contrib FROM contributions
@@ -1049,21 +1550,85 @@ def api_status(session_id: str, student_id: str):
     """,
         (session_id, cur_r, stu["id"]),
     ).fetchone()
-    conn.close()
+
+    submitted_actions_rows = conn.execute(
+        """
+        SELECT target_student_id, points
+        FROM actions
+        WHERE session_id=? AND round_no=? AND actor_student_id=?
+    """,
+        (session_id, cur_r, stu["id"]),
+    ).fetchall()
+    submitted_actions = {r["target_student_id"]: int(r["points"]) for r in submitted_actions_rows}
+
+    group_view_rows = []
+    action_targets = []
+    if stu["group_no"] is not None:
+        group_view_rows = conn.execute(
+            """
+            SELECT s.id, s.anonymous_id, COALESCE(c.contrib, 0) AS contrib
+            FROM students s
+            LEFT JOIN contributions c
+                ON c.session_id=s.session_id
+               AND c.round_no=?
+               AND c.student_id=s.id
+            WHERE s.session_id=? AND s.group_no=?
+            ORDER BY s.group_pos ASC, s.joined_at ASC
+        """,
+            (cur_r, session_id, int(stu["group_no"])),
+        ).fetchall()
+
+        for r in group_view_rows:
+            if r["id"] == stu["id"]:
+                continue
+            action_targets.append(
+                {
+                    "anonymous_id": r["anonymous_id"],
+                    "points": submitted_actions.get(r["id"], 0),
+                }
+            )
 
     history = [
         {
             "round": int(r["round_no"]),
+            "phase": r["phase"],
+            "phase_label": phase_label(r["phase"]),
+            "phase_round": int(r["phase_round"]),
             "group_no": int(r["group_no"]),
             "group_n": int(r["group_n"]),
             "group_total": int(r["group_total"]),
             "public_return": float(r["public_return"]),
+            "contrib": int(r["contrib"]),
+            "action_sent": int(r["action_sent"]),
+            "action_received": int(r["action_received"]),
+            "action_cost": float(r["action_cost"]),
+            "action_effect": float(r["action_effect"]),
             "income": float(r["income"]),
             "cumulative": float(r["cumulative"]),
             "computed_at": r["computed_at"],
         }
         for r in rows
     ]
+
+    latest_feedback = history[-1] if history else None
+    latest_group_contrib = []
+    if latest_feedback is not None:
+        latest_rows = conn.execute(
+            """
+            SELECT s.anonymous_id, r.contrib
+            FROM results r
+            JOIN students s ON s.id=r.student_id
+            WHERE r.session_id=? AND r.round_no=? AND r.group_no=?
+            ORDER BY s.group_pos ASC, s.joined_at ASC
+        """,
+            (session_id, int(latest_feedback["round"]), int(latest_feedback["group_no"])),
+        ).fetchall()
+        latest_group_contrib = [
+            {"anonymous_id": r["anonymous_id"], "contrib": int(r["contrib"])}
+            for r in latest_rows
+        ]
+
+    conn.close()
 
     return JSONResponse(
         {
@@ -1077,16 +1642,112 @@ def api_status(session_id: str, student_id: str):
                 "locked": bool(int(sess["locked"])),
                 "current_round": cur_r,
                 "round_open": bool(int(sess["round_open"])),
+                "action_open": bool(int(sess["action_open"])),
+                "phase": phase,
+                "phase_label": phase_label(phase),
+                "phase_round": phase_round,
+                "stage": stage,
             },
             "student": {
                 "student_id": stu["student_id"],
                 "name": stu["name"],
+                "anonymous_id": stu["anonymous_id"],
                 "group_no": stu["group_no"],
             },
             "current_round": {
                 "round": cur_r,
                 "submitted_contrib": int(cur_c["contrib"]) if cur_c else None,
             },
+            "group_view": [
+                {"anonymous_id": r["anonymous_id"], "contrib": int(r["contrib"])}
+                for r in group_view_rows
+            ],
+            "action_targets": action_targets,
             "history": history,
+            "latest_feedback": latest_feedback,
+            "latest_group_contrib": latest_group_contrib,
+        }
+    )
+
+
+# ---------------- Classroom display ----------------
+
+@app.get("/display/{session_id}", response_class=HTMLResponse)
+def display_page(request: Request, session_id: str):
+    sess = get_session(session_id)
+    return templates.TemplateResponse("display.html", {"request": request, "sess": sess})
+
+
+@app.get("/api/{session_id}/display_status")
+def api_display_status(session_id: str):
+    sess = get_session(session_id)
+    cur_round = int(sess["current_round"])
+    phase, phase_round = phase_for_round(cur_round)
+    stage = stage_of_session(sess)
+
+    conn = db()
+    latest_row = conn.execute(
+        "SELECT MAX(round_no) AS r FROM results WHERE session_id=?",
+        (session_id,),
+    ).fetchone()
+    latest_round = latest_row["r"]
+
+    latest_groups = []
+    if latest_round is not None:
+        rows = conn.execute(
+            """
+            SELECT group_no, COUNT(*) AS group_n, SUM(contrib) AS group_total, AVG(contrib) AS avg_contrib
+            FROM results
+            WHERE session_id=? AND round_no=?
+            GROUP BY group_no
+            ORDER BY group_no ASC
+        """,
+            (session_id, int(latest_round)),
+        ).fetchall()
+        latest_groups = [
+            {
+                "group_no": int(r["group_no"]),
+                "group_n": int(r["group_n"]),
+                "group_total": int(r["group_total"]),
+                "avg_contrib": float(r["avg_contrib"]),
+            }
+            for r in rows
+        ]
+
+    series_rows = conn.execute(
+        """
+        SELECT round_no, AVG(contrib) AS avg_contrib
+        FROM results
+        WHERE session_id=?
+        GROUP BY round_no
+        ORDER BY round_no ASC
+    """,
+        (session_id,),
+    ).fetchall()
+    series = [{"round": int(r["round_no"]), "avg_contrib": float(r["avg_contrib"])} for r in series_rows]
+
+    overall = conn.execute(
+        "SELECT AVG(contrib) AS v FROM results WHERE session_id=?",
+        (session_id,),
+    ).fetchone()["v"]
+    conn.close()
+
+    return JSONResponse(
+        {
+            "session": {
+                "id": sess["id"],
+                "title": sess["title"],
+                "rounds": int(sess["rounds"]),
+                "current_round": cur_round,
+                "phase": phase,
+                "phase_label": phase_label(phase),
+                "phase_round": phase_round,
+                "stage": stage,
+            },
+            "computed_rounds": len(series),
+            "latest_computed_round": int(latest_round) if latest_round is not None else None,
+            "latest_groups": latest_groups,
+            "avg_series": series,
+            "overall_avg_contrib": float(overall) if overall is not None else None,
         }
     )

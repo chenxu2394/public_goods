@@ -12,7 +12,8 @@
 <div class="card">
   <div><b>Student join link:</b> <span class="mono">{{ join_url }}</span></div>
   <div class="muted">Share this link with students.</div>
-  <div style="margin-top:8px;"><b>Export data:</b> <a href="{{ export_url }}">Download CSV (contributions/income/cumulative by round)</a></div>
+  <div style="margin-top:8px;"><b>Classroom display:</b> <a href="{{ display_url }}" target="_blank">Open projection page</a></div>
+  <div style="margin-top:8px;"><b>Export data:</b> <a href="{{ export_url }}">Download CSV (long format by round)</a></div>
 </div>
 
 <div class="card">
@@ -49,9 +50,10 @@
   <div class="row">
     <div class="col">
       <div>Students joined: <b>{{ counts.students }}</b></div>
+      <div>Target group size: <b>{{ sess.group_size }}</b> (system keeps groups between 3 and 7)</div>
       <div>Lock status:
         {% if sess.locked == 1 %}
-          <span class="pill ok">Locked (late joiners go to last group; new group opens when full)</span>
+          <span class="pill ok">Locked (late joiners go to last group)</span>
         {% else %}
           <span class="pill warn">Unlocked</span>
         {% endif %}
@@ -63,7 +65,7 @@
         <button type="submit">Randomize groups and lock</button>
       </form>
       {% else %}
-        <span class="muted">(To regroup, create a new session.)</span>
+        <span class="muted">To regroup, create a new session.</span>
       {% endif %}
     </div>
   </div>
@@ -71,42 +73,67 @@
 
 <div class="card">
   <h3>Round Control</h3>
-  <div>Current round: <b>{{ sess.current_round }}</b> / {{ sess.rounds }}
-    {% if sess.round_open == 1 %}<span class="pill ok">Accepting submissions</span>{% else %}<span class="pill muted">Closed</span>{% endif %}
+  <div>
+    Current total round: <b>{{ round_ctx.round }}</b> / {{ sess.rounds }}
+    <span class="pill">{{ round_ctx.phase_label }} {{ round_ctx.phase_round }} / 10</span>
+    {% if round_ctx.stage == "contribution" %}
+      <span class="pill ok">Contribution stage open</span>
+    {% elif round_ctx.stage == "action" %}
+      <span class="pill warn">{{ round_ctx.phase_label }} stage open</span>
+    {% else %}
+      <span class="pill muted">Round closed</span>
+    {% endif %}
   </div>
+  <div class="muted" style="margin-top:6px;">Computed rounds: <b>{{ computed_rounds }}</b> / {{ sess.rounds }}</div>
+
   <div class="row" style="margin-top:10px;">
     <div class="col">
-      <form method="post" action="/admin/{{ sess.id }}/open_round" class="row">
-        <div class="col">
-          <div class="muted">Select round to open</div>
-          <input name="round_no" type="number" min="1" max="{{ sess.rounds }}" value="{{ sess.current_round }}" />
-        </div>
-        <div class="col" style="align-self:flex-end;">
-          <button type="submit">Open submissions for this round</button>
-        </div>
+      <form method="post" action="/admin/{{ sess.id }}/open_round">
+        <input type="hidden" name="round_no" value="{{ round_ctx.round }}" />
+        <button type="submit">Open current round</button>
       </form>
+      <div class="muted" style="margin-top:6px;">Open contribution stage for the current round.</div>
     </div>
-    <div class="col" style="text-align:right; align-self:flex-end;">
-      <form method="post" action="/admin/{{ sess.id }}/close_and_compute" style="display:inline;">
-        <button type="submit">Close and compute this round</button>
+    <div class="col">
+      <form method="post" action="/admin/{{ sess.id }}/close_and_compute">
+        <button type="submit">{{ round_ctx.close_label }}</button>
       </form>
-      <div class="muted" style="margin-top:6px;">After computing, student pages auto-refresh and show income/cumulative values.</div>
+      <div class="muted" style="margin-top:6px;">For reward/punishment rounds, click once to open action stage and again to compute.</div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:10px;">
+    <div class="col">
+      <form method="post" action="/admin/{{ sess.id }}/switch_phase" style="display:inline;">
+        <input type="hidden" name="phase" value="baseline" />
+        <button type="submit">Go to Baseline</button>
+      </form>
+      <form method="post" action="/admin/{{ sess.id }}/switch_phase" style="display:inline; margin-left:8px;">
+        <input type="hidden" name="phase" value="reward" />
+        <button type="submit">Go to Reward</button>
+      </form>
+      <form method="post" action="/admin/{{ sess.id }}/switch_phase" style="display:inline; margin-left:8px;">
+        <input type="hidden" name="phase" value="punishment" />
+        <button type="submit">Go to Punishment</button>
+      </form>
+      <div class="muted" style="margin-top:6px;">Jump to the first uncomputed round in each institutional phase.</div>
     </div>
   </div>
 </div>
 
 <div class="card">
-  <h3>Students</h3>
+  <h3>Students (teacher-only identity mapping)</h3>
   {% if students|length == 0 %}
     <div class="muted">No students have joined yet.</div>
   {% else %}
   <table>
     <tr>
-      <th>Joined at</th><th>Student ID</th><th>Name</th><th>Group</th><th>Student page</th>
+      <th>Joined at</th><th>Anonymous ID</th><th>Student ID</th><th>Name</th><th>Group</th><th>Student page</th>
     </tr>
     {% for st in students %}
       <tr>
         <td class="mono">{{ st.joined_at }}</td>
+        <td class="mono">{{ st.anonymous_id }}</td>
         <td class="mono">{{ st.student_id }}</td>
         <td>{{ st.name }}</td>
         <td>{% if st.group_no %}{{ st.group_no }}{% else %}<span class="muted">Not assigned</span>{% endif %}</td>

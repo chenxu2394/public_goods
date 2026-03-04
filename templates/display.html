@@ -1,0 +1,76 @@
+{% extends "_base.html" %}
+{% set heading = "Classroom Display" %}
+{% set subheading = sess.title %}
+{% block content %}
+<div class="card">
+  <div>
+    Current total round: <b id="cur_round">{{ sess.current_round }}</b> / {{ sess.rounds }}
+    <span class="pill" id="phase_badge">-</span>
+    <span class="pill" id="stage_badge">-</span>
+  </div>
+  <div style="margin-top:6px;">Computed rounds: <b id="computed_rounds">0</b></div>
+  <div>Latest computed round: <b id="latest_round">-</b></div>
+  <div>Overall average contribution: <b id="overall_avg">-</b></div>
+</div>
+
+<div class="card">
+  <h3>Latest Round Group Summary</h3>
+  <table id="group_table">
+    <tr><th>Group</th><th>Group Size</th><th>Total Contribution</th><th>Average Contribution</th></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>Average Contribution by Round</h3>
+  <table id="series_table">
+    <tr><th>Total Round</th><th>Average Contribution</th></tr>
+  </table>
+</div>
+
+<script>
+const sessionId = "{{ sess.id }}";
+
+function stageText(stage){
+  if(stage === "contribution") return "Contribution Open";
+  if(stage === "action") return "Action Stage Open";
+  return "Round Closed";
+}
+
+async function fetchDisplayStatus(){
+  const res = await fetch(`/api/${sessionId}/display_status`);
+  if(!res.ok) return;
+  const data = await res.json();
+
+  document.getElementById("cur_round").innerText = data.session.current_round;
+  document.getElementById("phase_badge").innerText = `${data.session.phase_label} ${data.session.phase_round}/10`;
+
+  const stageBadge = document.getElementById("stage_badge");
+  stageBadge.innerText = stageText(data.session.stage);
+  stageBadge.className = "pill " + (data.session.stage === "contribution" ? "ok" : (data.session.stage === "action" ? "warn" : "muted"));
+
+  document.getElementById("computed_rounds").innerText = data.computed_rounds;
+  document.getElementById("latest_round").innerText = data.latest_computed_round ?? "-";
+  document.getElementById("overall_avg").innerText = data.overall_avg_contrib === null ? "-" : data.overall_avg_contrib.toFixed(2);
+
+  const groupTable = document.getElementById("group_table");
+  while(groupTable.rows.length > 1) groupTable.deleteRow(1);
+  data.latest_groups.forEach(g => {
+    const tr = groupTable.insertRow(-1);
+    [g.group_no, g.group_n, g.group_total, g.avg_contrib.toFixed(2)].forEach(v => {
+      tr.insertCell(-1).innerText = v;
+    });
+  });
+
+  const seriesTable = document.getElementById("series_table");
+  while(seriesTable.rows.length > 1) seriesTable.deleteRow(1);
+  data.avg_series.forEach(r => {
+    const tr = seriesTable.insertRow(-1);
+    tr.insertCell(-1).innerText = r.round;
+    tr.insertCell(-1).innerText = r.avg_contrib.toFixed(2);
+  });
+}
+
+fetchDisplayStatus();
+setInterval(fetchDisplayStatus, 2000);
+</script>
+{% endblock %}

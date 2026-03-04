@@ -81,8 +81,15 @@ Azure Web App settings for private GHCR image pull:
 
 ## How to use
 
-1. Visit /admin (redirects to /admin/login)
-2. Create a session
-3. Upload whitelist CSV (student_id,name) for that session
-4. Send join link: https://public-goods.azurewebsites.net/join/<session_id>
-5. Lock groups, open rounds, close+compute, export CSV
+1. Visit `/admin` (redirects to `/admin/login`)
+2. Create a session (recommended: 30 rounds = Baseline 10 + Reward 10 + Punishment 10)
+3. Upload whitelist CSV (`student_id,name`) for that session
+4. Share join link: `https://public-goods.azurewebsites.net/join/<session_id>`
+5. Lock groups (random assignment; groups constrained to 3-7 students, target 5)
+6. For each round:
+   - Open current round (contribution stage)
+   - Students submit contribution (`0-10`)
+   - Baseline round: close and compute directly
+   - Reward/Punishment round: close once to open action stage, close again to compute
+7. Use `/display/<session_id>` for classroom projection
+8. Export CSV from admin panel (long format: one row per student per round)

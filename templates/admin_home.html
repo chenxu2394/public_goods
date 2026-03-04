@@ -1,6 +1,6 @@
 {% extends "_base.html" %}
 {% set heading = "Admin Home" %}
-{% set subheading = "Create and manage experiment sessions" %}
+{% set subheading = "Create and manage classroom experiments" %}
 {% block top_right %}
 <form method="post" action="/admin/logout" style="display:inline;">
   <button type="submit">Sign out</button>
@@ -8,7 +8,6 @@
 {% endblock %}
 {% block content %}
 
-<!-- Delete confirmation modal -->
 <div id="delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000; align-items:center; justify-content:center;">
   <div style="background:#fff; border-radius:12px; padding:28px 32px; max-width:480px; width:90%; box-shadow:0 4px 24px rgba(0,0,0,0.18);">
     <h3 id="delete-modal-title" style="margin:0 0 12px 0;">Delete Session</h3>
@@ -53,6 +52,7 @@
     }
   });
 </script>
+
 <div class="card">
   <h3>Change Password</h3>
   {% if pw_error %}<div class="pill warn" style="margin-bottom:8px;">{{ pw_error }}</div>{% endif %}
@@ -78,14 +78,17 @@
 
 <div class="card">
   <h3>Create New Session</h3>
+  <div class="muted" style="margin-bottom:8px;">
+    Recommended classroom setup: 30 rounds total = Baseline 10 + Reward 10 + Punishment 10.
+  </div>
   <form method="post" action="/admin/create" class="row">
     <div class="col">
       <div class="muted">Title</div>
-      <input name="title" placeholder="Example: MPA-01 Week 3 Public Goods Experiment" required />
+      <input name="title" placeholder="Example: MPA Week 3 Public Goods Experiment" required />
     </div>
     <div class="col">
-      <div class="muted">Default group size</div>
-      <input name="group_size" type="number" value="5" min="2" max="20" />
+      <div class="muted">Target group size (3-7)</div>
+      <input name="group_size" type="number" value="5" min="3" max="7" />
     </div>
     <div class="col">
       <div class="muted">Multiplier</div>
@@ -97,7 +100,7 @@
     </div>
     <div class="col">
       <div class="muted">Rounds</div>
-      <input name="rounds" type="number" value="10" min="1" max="50" />
+      <input name="rounds" type="number" value="30" min="1" max="50" />
     </div>
     <div class="col" style="align-self:flex-end;">
       <button type="submit">Create</button>
@@ -119,7 +122,7 @@
           <td>group size={{ s.group_size }}; multiplier={{ s.multiplier }}; endowment={{ s.endowment }}; rounds={{ s.rounds }}</td>
           <td>
             {% if s.locked == 1 %}<span class="pill ok">Groups locked</span>{% else %}<span class="pill warn">Unlocked</span>{% endif %}
-            {% if s.round_open == 1 %}<span class="pill ok">Round open</span>{% else %}<span class="pill muted">Round closed</span>{% endif %}
+            {% if s.round_open == 1 %}<span class="pill ok">Contribution open</span>{% elif s.action_open == 1 %}<span class="pill warn">Action open</span>{% else %}<span class="pill muted">Round closed</span>{% endif %}
             <span class="pill">Current round {{ s.current_round }}</span>
           </td>
           <td><a href="/admin/{{ s.id }}">Manage</a></td>

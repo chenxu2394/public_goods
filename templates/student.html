@@ -2,21 +2,25 @@
 {% set heading = "Student Page" %}
 {% set subheading = sess.title %}
 {% block top_right %}
-  <span class="pill">Student ID {{ stu.student_id }}</span>
+  <span class="pill">Anonymous ID {{ stu.anonymous_id }}</span>
 {% endblock %}
 {% block content %}
 <div class="card">
-  <div><b>{{ stu.name }}</b> (student ID: <span class="mono">{{ stu.student_id }}</span>)</div>
+  <div><b>Experiment ID:</b> <span class="mono" id="anon_id">{{ stu.anonymous_id }}</span></div>
   <div>Group: <span id="group_no">{% if stu.group_no %}{{ stu.group_no }}{% else %}Pending assignment{% endif %}</span></div>
-  <div class="muted">This page auto-refreshes. Submission status and round income/cumulative values appear after the instructor closes and computes each round.</div>
+  <div class="muted">This page auto-refreshes. You only see anonymous IDs for group members.</div>
 </div>
 
 <div class="card">
-  <h3>Current Round Submission</h3>
-  <div>Current round: <b id="cur_round">{{ sess.current_round }}</b>
-      Status: <span id="round_state" class="pill">{% if sess.round_open == 1 %}Open{% else %}Closed{% endif %}</span>
+  <h3>Current Round</h3>
+  <div>
+    Total round: <b id="cur_round">{{ sess.current_round }}</b> / {{ sess.rounds }}
+    <span class="pill" id="phase_badge">-</span>
+    <span class="pill" id="stage_badge">-</span>
   </div>
-  <div style="margin-top:10px;">
+
+  <div style="margin-top:12px;" id="contrib_wrap">
+    <h4 style="margin:0 0 8px 0;">Contribution</h4>
     <form id="submit_form">
       <input type="hidden" name="student_id" value="{{ stu.student_id }}"/>
       <div class="row">
@@ -25,7 +29,7 @@
           <input name="contrib" id="contrib" type="number" min="0" max="{{ sess.endowment }}" value="0"/>
         </div>
         <div class="col" style="align-self:flex-end;">
-          <button type="submit">Submit / Update</button>
+          <button type="submit" id="contrib_submit_btn">Submit / Update Contribution</button>
         </div>
         <div class="col" style="align-self:flex-end;">
           <span id="submit_msg" class="muted"></span>
@@ -33,15 +37,45 @@
       </div>
     </form>
   </div>
+
+  <div style="margin-top:12px;" id="action_wrap">
+    <h4 style="margin:0 0 8px 0;" id="action_title">Reward / Punishment</h4>
+    <div class="muted" id="action_desc"></div>
+    <form id="action_form" style="margin-top:8px;">
+      <table id="action_table">
+        <tr><th>Anonymous ID</th><th>Points</th></tr>
+      </table>
+      <div style="margin-top:8px;">
+        <button type="submit" id="action_submit_btn">Submit / Update Actions</button>
+        <span id="action_msg" class="muted" style="margin-left:10px;"></span>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Current Group Anonymous Contributions</h3>
+  <div class="muted">Only anonymous ID + contribution are shown.</div>
+  <table id="group_table" style="margin-top:8px;">
+    <tr><th>ID</th><th>Contribution</th></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h3>Latest Round Feedback</h3>
+  <div class="muted">After each round is computed, the latest result appears here automatically.</div>
+  <table id="latest_table" style="margin-top:8px;">
+    <tr><th>Total Round</th><th>Institution</th><th>Institution Round</th><th>Your Contribution</th><th>Group Total</th><th>Income</th><th>Cumulative</th></tr>
+  </table>
 </div>
 
 <div class="card">
   <h3>Income History</h3>
-  <div class="muted">After the final round is computed, cumulative income is your total payoff.</div>
+  <div class="muted">After round 30 is computed, cumulative income is your final total payoff.</div>
   <div style="overflow:auto; margin-top:10px;">
     <table id="hist_table">
       <tr>
-        <th>Round</th><th>Group</th><th>Group size</th><th>Group total contribution</th><th>Public return (per person)</th><th>Round income</th><th>Cumulative income</th><th>Computed at</th>
+        <th>Total Round</th><th>Institution</th><th>Institution Round</th><th>Your Contribution</th><th>Group Total</th><th>Income</th><th>Cumulative</th><th>Computed at</th>
       </tr>
     </table>
   </div>
@@ -51,6 +85,110 @@
 const sessionId = "{{ sess.id }}";
 const studentId = "{{ stu.student_id }}";
 
+function stageText(stage){
+  if(stage === "contribution") return "Contribution Open";
+  if(stage === "action") return "Action Stage Open";
+  return "Round Closed";
+}
+
+function setPhaseAndStage(session){
+  const phaseBadge = document.getElementById("phase_badge");
+  phaseBadge.innerText = `${session.phase_label} ${session.phase_round}/10`;
+  const stageBadge = document.getElementById("stage_badge");
+  stageBadge.innerText = stageText(session.stage);
+  stageBadge.className = "pill " + (session.stage === "contribution" ? "ok" : (session.stage === "action" ? "warn" : "muted"));
+}
+
+function renderGroupView(groupView){
+  const table = document.getElementById("group_table");
+  while(table.rows.length > 1) table.deleteRow(1);
+  groupView.forEach(r => {
+    const tr = table.insertRow(-1);
+    tr.insertCell(-1).innerText = r.anonymous_id;
+    tr.insertCell(-1).innerText = r.contrib;
+  });
+}
+
+function renderLatestFeedback(latest){
+  const table = document.getElementById("latest_table");
+  while(table.rows.length > 1) table.deleteRow(1);
+  if(!latest) return;
+  const tr = table.insertRow(-1);
+  [
+    latest.round,
+    latest.phase_label,
+    latest.phase_round,
+    latest.contrib,
+    latest.group_total,
+    latest.income.toFixed(2),
+    latest.cumulative.toFixed(2)
+  ].forEach(v => {
+    tr.insertCell(-1).innerText = v;
+  });
+}
+
+function renderHistory(history){
+  const table = document.getElementById("hist_table");
+  while(table.rows.length > 1) table.deleteRow(1);
+  history.forEach(r => {
+    const tr = table.insertRow(-1);
+    [
+      r.round,
+      r.phase_label,
+      r.phase_round,
+      r.contrib,
+      r.group_total,
+      r.income.toFixed(2),
+      r.cumulative.toFixed(2),
+      r.computed_at
+    ].forEach(v => {
+      tr.insertCell(-1).innerText = v;
+    });
+  });
+}
+
+function renderActionTargets(data){
+  const wrap = document.getElementById("action_wrap");
+  const table = document.getElementById("action_table");
+  const title = document.getElementById("action_title");
+  const desc = document.getElementById("action_desc");
+
+  while(table.rows.length > 1) table.deleteRow(1);
+
+  const inActionRound = data.session.phase === "reward" || data.session.phase === "punishment";
+  const actionOpen = data.session.stage === "action";
+
+  if(!inActionRound){
+    wrap.style.display = "none";
+    return;
+  }
+
+  wrap.style.display = "block";
+  if(data.session.phase === "reward"){
+    title.innerText = "Reward Stage";
+    desc.innerText = "Each reward point costs you 1 and gives the target +2 income.";
+  }else{
+    title.innerText = "Punishment Stage";
+    desc.innerText = "Each punishment point costs you 1 and reduces the target by 3.";
+  }
+
+  data.action_targets.forEach(t => {
+    const tr = table.insertRow(-1);
+    tr.insertCell(-1).innerText = t.anonymous_id;
+    const td = tr.insertCell(-1);
+    const inp = document.createElement("input");
+    inp.type = "number";
+    inp.min = "0";
+    inp.max = "10";
+    inp.value = t.points;
+    inp.dataset.anon = t.anonymous_id;
+    inp.disabled = !actionOpen;
+    td.appendChild(inp);
+  });
+
+  document.getElementById("action_submit_btn").disabled = !actionOpen;
+}
+
 async function fetchStatus(){
   const res = await fetch(`/api/${sessionId}/status?student_id=${encodeURIComponent(studentId)}`);
   if(!res.ok) return;
@@ -58,38 +196,27 @@ async function fetchStatus(){
 
   document.getElementById("cur_round").innerText = data.session.current_round;
   document.getElementById("group_no").innerText = data.student.group_no ?? "Pending assignment";
+  document.getElementById("anon_id").innerText = data.student.anonymous_id;
 
-  const stateEl = document.getElementById("round_state");
-  stateEl.innerText = data.session.round_open ? "Open" : "Closed";
-  stateEl.className = "pill " + (data.session.round_open ? "ok" : "muted");
+  setPhaseAndStage(data.session);
 
   const msg = document.getElementById("submit_msg");
   if(data.current_round.submitted_contrib !== null){
-    msg.innerText = `Submitted: ${data.current_round.submitted_contrib}`;
+    msg.innerText = `Submitted contribution: ${data.current_round.submitted_contrib}`;
   } else {
-    msg.innerText = data.session.round_open ? "Not submitted yet" : "Round closed";
+    msg.innerText = data.session.stage === "contribution" ? "Not submitted yet" : "Contribution stage closed";
   }
 
-  const table = document.getElementById("hist_table");
-  while(table.rows.length > 1) table.deleteRow(1);
-  data.history.forEach(r => {
-    const tr = table.insertRow(-1);
-    const cells = [
-      r.round, r.group_no, r.group_n, r.group_total,
-      r.public_return.toFixed(2), r.income.toFixed(2), r.cumulative.toFixed(2),
-      r.computed_at
-    ];
-    cells.forEach(v => {
-      const td = tr.insertCell(-1);
-      td.innerText = v;
-    });
-  });
-
   const contribInput = document.getElementById("contrib");
-  const submitBtn = document.querySelector("#submit_form button");
-  const disabled = !data.session.round_open;
-  contribInput.disabled = disabled;
-  submitBtn.disabled = disabled;
+  const contribBtn = document.getElementById("contrib_submit_btn");
+  const canContrib = data.session.stage === "contribution";
+  contribInput.disabled = !canContrib;
+  contribBtn.disabled = !canContrib;
+
+  renderGroupView(data.group_view);
+  renderActionTargets(data);
+  renderLatestFeedback(data.latest_feedback);
+  renderHistory(data.history);
 }
 
 document.getElementById("submit_form").addEventListener("submit", async (e) => {
@@ -99,7 +226,31 @@ document.getElementById("submit_form").addEventListener("submit", async (e) => {
   const msg = document.getElementById("submit_msg");
   if(res.ok){
     const data = await res.json();
-    msg.innerText = `Submitted: ${data.contrib}`;
+    msg.innerText = `Submitted contribution: ${data.contrib}`;
+  } else {
+    const t = await res.text();
+    msg.innerText = `Submit failed: ${t}`;
+  }
+  await fetchStatus();
+});
+
+document.getElementById("action_form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const inputs = Array.from(document.querySelectorAll("#action_table input[data-anon]"));
+  const allocations = {};
+  inputs.forEach(inp => {
+    allocations[inp.dataset.anon] = Number(inp.value || 0);
+  });
+
+  const res = await fetch(`/api/${sessionId}/submit_actions`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({student_id: studentId, allocations})
+  });
+
+  const msg = document.getElementById("action_msg");
+  if(res.ok){
+    msg.innerText = "Action submission saved.";
   } else {
     const t = await res.text();
     msg.innerText = `Submit failed: ${t}`;
