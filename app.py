@@ -503,6 +503,8 @@ def delete_setting(key: str) -> None:
 def invalidate_reset_token() -> None:
     """Delete any stored password reset token."""
     delete_setting("password_reset_token")
+
+
 def send_reset_email(token: str) -> bool:
     """Send a password reset email to the admin. Returns True on success."""
     if not SMTP_USERNAME or not SMTP_PASSWORD:
@@ -1138,8 +1140,19 @@ def forgot_password_submit(request: Request):
     )
 
 
+def _reset_password_secret_key_error(request: Request, token: str):
+    """Return a 503 template response when SECRET_KEY is not configured."""
+    return templates.TemplateResponse(
+        "reset_password.html",
+        {"request": request, "valid": False, "token": token, "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60},
+        status_code=503,
+    )
+
+
 @app.get("/admin/reset_password/{token}", response_class=HTMLResponse)
 def reset_password_page(request: Request, token: str):
+    if not SECRET_KEY:
+        return _reset_password_secret_key_error(request, token)
     valid = verify_reset_token(token)
     return templates.TemplateResponse(
         "reset_password.html",
@@ -1155,6 +1168,8 @@ def reset_password_submit(
     confirm_password: str = Form(...),
 ):
     reset_ttl_minutes = RESET_TOKEN_TTL_SECONDS // 60
+    if not SECRET_KEY:
+        return _reset_password_secret_key_error(request, token)
     if not verify_reset_token(token):
         return templates.TemplateResponse(
             "reset_password.html",
