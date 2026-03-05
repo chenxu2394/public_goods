@@ -1125,9 +1125,9 @@ def forgot_password_submit(request: Request):
             },
         )
     token = secrets.token_urlsafe(32)
-    record_reset_attempt()
     sent = send_reset_email(token)
     if sent:
+        record_reset_attempt()
         store_reset_token(token)
     return templates.TemplateResponse(
         "forgot_password.html",
@@ -1144,7 +1144,13 @@ def _reset_password_secret_key_error(request: Request, token: str):
     """Return a 503 template response when SECRET_KEY is not configured."""
     return templates.TemplateResponse(
         "reset_password.html",
-        {"request": request, "valid": False, "token": token, "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60},
+        {
+            "request": request,
+            "valid": False,
+            "secret_key_missing": True,
+            "token": token,
+            "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60,
+        },
         status_code=503,
     )
 
