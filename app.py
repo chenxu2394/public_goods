@@ -13,6 +13,7 @@ import hashlib
 import random
 import math
 import smtplib
+import ssl
 from email.mime.text import MIMEText
 from typing import List, Dict, Tuple, Optional
 
@@ -40,16 +41,17 @@ ADMIN_COOKIE_SECURE = os.environ.get("ADMIN_COOKIE_SECURE", "1").strip().lower()
 
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://public-goods.azurewebsites.net").rstrip("/")
 
-# Password reset
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "tingjiachen@outlook.com")
-RESET_TOKEN_TTL_SECONDS = 10 * 60  # 10 minutes
-
 # SMTP configuration (set these in Azure App Settings)
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.office365.com")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", "")  # defaults to SMTP_USERNAME if not set
+
+# Password reset
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL") or SMTP_USERNAME
+RESET_TOKEN_TTL_SECONDS = 10 * 60  # 10 minutes
+RESET_COOLDOWN_SECONDS = 60  # minimum gap between reset requests
 
 PHASE_ROUNDS = 10
 PHASES = ("baseline", "reward", "punishment")
@@ -419,10 +421,22 @@ def check_admin_password(entered: str) -> bool:
 
 # ---------------- Password reset ----------------
 
+def _hmac_token(token: str) -> str:
+    """Return HMAC-SHA256 hex digest of a reset token using SECRET_KEY."""
+    return hmac.new(SECRET_KEY.encode(), token.encode(), hashlib.sha256).hexdigest()
+
+
 def store_reset_token(token: str) -> None:
-    """Store a password reset token with an expiry timestamp."""
-    expires_at = int(dt.datetime.now().timestamp()) + RESET_TOKEN_TTL_SECONDS
-    set_setting("password_reset_token", json.dumps({"token": token, "expires_at": expires_at}))
+    """Store the HMAC of a password reset token with an expiry timestamp."""
+    now = int(dt.datetime.now().timestamp())
+    set_setting(
+        "password_reset_token",
+        json.dumps({
+            "token_hash": _hmac_token(token),
+            "expires_at": now + RESET_TOKEN_TTL_SECONDS,
+            "created_at": now,
+        }),
+    )
 
 
 def verify_reset_token(token: str) -> bool:
@@ -432,13 +446,26 @@ def verify_reset_token(token: str) -> bool:
         return False
     try:
         obj = json.loads(data)
-        if not hmac.compare_digest(obj.get("token", ""), token):
+        if not hmac.compare_digest(obj.get("token_hash", ""), _hmac_token(token)):
             return False
         if int(dt.datetime.now().timestamp()) > int(obj.get("expires_at", 0)):
             return False
         return True
     except Exception:
         return False
+
+
+def get_reset_cooldown_remaining() -> int:
+    """Return seconds remaining in the per-request cooldown, or 0 if none."""
+    data = get_setting("password_reset_token")
+    if not data:
+        return 0
+    try:
+        obj = json.loads(data)
+        cooldown_until = int(obj.get("created_at", 0)) + RESET_COOLDOWN_SECONDS
+        return max(0, cooldown_until - int(dt.datetime.now().timestamp()))
+    except Exception:
+        return 0
 
 
 def invalidate_reset_token() -> None:
@@ -456,19 +483,23 @@ def send_reset_email(token: str) -> bool:
     if not SMTP_USERNAME or not SMTP_PASSWORD:
         return False
     reset_url = f"{PUBLIC_BASE_URL}/admin/reset_password/{token}"
+    ttl_minutes = RESET_TOKEN_TTL_SECONDS // 60
     body = (
         "You have requested a password reset for the Public Goods Experiment admin panel.\n\n"
         "Click the link below to reset your password:\n\n"
         f"{reset_url}\n\n"
-        "This link is valid for 10 minutes. If you did not request this, please ignore this email."
+        f"This link is valid for {ttl_minutes} minutes. If you did not request this, please ignore this email."
     )
     msg = MIMEText(body)
     msg["Subject"] = "Password Reset - Public Goods Experiment"
     msg["From"] = SMTP_FROM or SMTP_USERNAME
     msg["To"] = ADMIN_EMAIL
     try:
+        context = ssl.create_default_context()
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
             server.login(SMTP_USERNAME, SMTP_PASSWORD)
             server.send_message(msg)
         return True
@@ -1033,16 +1064,31 @@ def admin_logout():
 @app.get("/admin/forgot_password", response_class=HTMLResponse)
 def forgot_password_page(request: Request):
     return templates.TemplateResponse(
-        "forgot_password.html", {"request": request, "admin_email": ADMIN_EMAIL}
+        "forgot_password.html",
+        {"request": request, "admin_email": ADMIN_EMAIL, "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60},
     )
 
 
 @app.post("/admin/forgot_password", response_class=HTMLResponse)
 def forgot_password_submit(request: Request):
-    token = secrets.token_urlsafe(32)
-    store_reset_token(token)
-    sent = send_reset_email(token)
     smtp_configured = bool(SMTP_USERNAME) and bool(SMTP_PASSWORD)
+    reset_ttl_minutes = RESET_TOKEN_TTL_SECONDS // 60
+    cooldown_remaining = get_reset_cooldown_remaining()
+    if cooldown_remaining > 0:
+        return templates.TemplateResponse(
+            "forgot_password.html",
+            {
+                "request": request,
+                "cooldown": cooldown_remaining,
+                "admin_email": ADMIN_EMAIL,
+                "smtp_configured": smtp_configured,
+                "reset_ttl_minutes": reset_ttl_minutes,
+            },
+        )
+    token = secrets.token_urlsafe(32)
+    sent = send_reset_email(token)
+    if sent:
+        store_reset_token(token)
     return templates.TemplateResponse(
         "forgot_password.html",
         {
@@ -1050,6 +1096,7 @@ def forgot_password_submit(request: Request):
             "sent": sent,
             "admin_email": ADMIN_EMAIL,
             "smtp_configured": smtp_configured,
+            "reset_ttl_minutes": reset_ttl_minutes,
         },
     )
 
@@ -1059,7 +1106,7 @@ def reset_password_page(request: Request, token: str):
     valid = verify_reset_token(token)
     return templates.TemplateResponse(
         "reset_password.html",
-        {"request": request, "valid": valid, "token": token},
+        {"request": request, "valid": valid, "token": token, "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60},
     )
 
 
@@ -1070,22 +1117,23 @@ def reset_password_submit(
     new_password: str = Form(...),
     confirm_password: str = Form(...),
 ):
+    reset_ttl_minutes = RESET_TOKEN_TTL_SECONDS // 60
     if not verify_reset_token(token):
         return templates.TemplateResponse(
             "reset_password.html",
-            {"request": request, "valid": False, "token": token},
+            {"request": request, "valid": False, "token": token, "reset_ttl_minutes": reset_ttl_minutes},
             status_code=400,
         )
     if not new_password:
         return templates.TemplateResponse(
             "reset_password.html",
-            {"request": request, "valid": True, "token": token, "error": "Password must not be empty."},
+            {"request": request, "valid": True, "token": token, "error": "Password must not be empty.", "reset_ttl_minutes": reset_ttl_minutes},
             status_code=400,
         )
     if new_password != confirm_password:
         return templates.TemplateResponse(
             "reset_password.html",
-            {"request": request, "valid": True, "token": token, "error": "Passwords do not match."},
+            {"request": request, "valid": True, "token": token, "error": "Passwords do not match.", "reset_ttl_minutes": reset_ttl_minutes},
             status_code=400,
         )
     set_setting("admin_password_hash", _hash_password(new_password))
