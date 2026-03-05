@@ -39,14 +39,14 @@
   </div>
 
   <div style="margin-top:12px;" id="action_wrap">
-    <h4 style="margin:0 0 8px 0;" id="action_title">Reward / Punishment / 奖励 / 惩罚</h4>
+    <h4 style="margin:0 0 8px 0;" id="action_title">Reward or Punishment / 奖励或惩罚</h4>
     <div class="muted" id="action_desc"></div>
     <form id="action_form" style="margin-top:8px;">
       <table id="action_table">
         <tr><th>Anonymous ID / 匿名编号</th><th>Points / 点数</th></tr>
       </table>
       <div style="margin-top:8px;">
-        <button type="submit" id="action_submit_btn">Submit / Update Actions / 提交 / 更新操作</button>
+        <button type="submit" id="action_submit_btn">Submit or Update Actions / 提交或更新操作</button>
         <span id="action_msg" class="muted" style="margin-left:10px;"></span>
       </div>
     </form>
@@ -123,7 +123,7 @@ function renderLatestFeedback(latest){
   const tr = table.insertRow(-1);
   [
     latest.round,
-    latest.phase_label,
+    phaseLabelText(latest.phase_label),
     latest.phase_round,
     latest.contrib,
     latest.group_total,
@@ -141,7 +141,7 @@ function renderHistory(history){
     const tr = table.insertRow(-1);
     [
       r.round,
-      r.phase_label,
+      phaseLabelText(r.phase_label),
       r.phase_round,
       r.contrib,
       r.group_total,
