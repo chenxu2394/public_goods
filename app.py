@@ -375,9 +375,23 @@ def verify_admin_token(token: str) -> bool:
         now_ts = int(dt.datetime.now().timestamp())
         if ts <= 0 or now_ts - ts > ADMIN_TOKEN_TTL_SECONDS:
             return False
+        # Reject tokens issued before the last password change (server-side revocation)
+        epoch_data = get_setting("password_changed_at")
+        if epoch_data:
+            try:
+                if ts < int(epoch_data.strip()):
+                    return False
+            except ValueError:
+                # Malformed epoch data — treat as no epoch (allow token)
+                pass
         return True
     except Exception:
         return False
+
+
+def _update_password_epoch() -> None:
+    """Record the current timestamp as the password-changed epoch for session revocation."""
+    set_setting("password_changed_at", str(int(dt.datetime.now().timestamp())))
 
 
 def _hash_password(password: str) -> str:
@@ -430,8 +444,13 @@ def _hmac_token(token: str) -> str:
     return hmac.new(SECRET_KEY.encode(), token.encode(), hashlib.sha256).hexdigest()
 
 
+def record_reset_attempt() -> None:
+    """Record the current time as the last reset attempt, to enforce cooldown even on failure."""
+    set_setting("password_reset_last_sent", str(int(dt.datetime.now().timestamp())))
+
+
 def store_reset_token(token: str) -> None:
-    """Store the HMAC of a password reset token with an expiry timestamp, and record cooldown."""
+    """Store the HMAC of a password reset token with an expiry timestamp."""
     now = int(dt.datetime.now().timestamp())
     set_setting(
         "password_reset_token",
@@ -440,7 +459,6 @@ def store_reset_token(token: str) -> None:
             "expires_at": now + RESET_TOKEN_TTL_SECONDS,
         }),
     )
-    set_setting("password_reset_last_sent", str(now))
 
 
 def verify_reset_token(token: str) -> bool:
@@ -1102,6 +1120,7 @@ def forgot_password_submit(request: Request):
             },
         )
     token = secrets.token_urlsafe(32)
+    record_reset_attempt()
     sent = send_reset_email(token)
     if sent:
         store_reset_token(token)
@@ -1152,8 +1171,11 @@ def reset_password_submit(
             status_code=400,
         )
     set_setting("admin_password_hash", _hash_password(new_password))
+    _update_password_epoch()
     invalidate_reset_token()
-    return RedirectResponse(url="/admin/login?pw_changed=1", status_code=303)
+    resp = RedirectResponse(url="/admin/login?pw_changed=1", status_code=303)
+    resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
+    return resp
 
 
 @app.post("/admin/change_password")
@@ -1182,6 +1204,7 @@ def admin_change_password(
     if new_password != confirm_password:
         return _render_error("New passwords do not match.")
     set_setting("admin_password_hash", _hash_password(new_password))
+    _update_password_epoch()
     resp = RedirectResponse(url="/admin/login?pw_changed=1", status_code=303)
     resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
     return resp
