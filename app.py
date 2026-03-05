@@ -43,7 +43,11 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://public-goods.azurew
 
 # SMTP configuration (set these in Azure App Settings)
 SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.office365.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+_smtp_port_raw = os.environ.get("SMTP_PORT", "587")
+try:
+    SMTP_PORT = int(_smtp_port_raw.strip())
+except (TypeError, ValueError):
+    SMTP_PORT = 587
 SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "")
 SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 SMTP_FROM = os.environ.get("SMTP_FROM", "")  # defaults to SMTP_USERNAME if not set
@@ -427,16 +431,16 @@ def _hmac_token(token: str) -> str:
 
 
 def store_reset_token(token: str) -> None:
-    """Store the HMAC of a password reset token with an expiry timestamp."""
+    """Store the HMAC of a password reset token with an expiry timestamp, and record cooldown."""
     now = int(dt.datetime.now().timestamp())
     set_setting(
         "password_reset_token",
         json.dumps({
             "token_hash": _hmac_token(token),
             "expires_at": now + RESET_TOKEN_TTL_SECONDS,
-            "created_at": now,
         }),
     )
+    set_setting("password_reset_last_sent", str(now))
 
 
 def verify_reset_token(token: str) -> bool:
@@ -457,14 +461,14 @@ def verify_reset_token(token: str) -> bool:
 
 def get_reset_cooldown_remaining() -> int:
     """Return seconds remaining in the per-request cooldown, or 0 if none."""
-    data = get_setting("password_reset_token")
+    data = get_setting("password_reset_last_sent")
     if not data:
         return 0
     try:
-        obj = json.loads(data)
-        cooldown_until = int(obj.get("created_at", 0)) + RESET_COOLDOWN_SECONDS
+        last_sent = int(data.strip())
+        cooldown_until = last_sent + RESET_COOLDOWN_SECONDS
         return max(0, cooldown_until - int(dt.datetime.now().timestamp()))
-    except Exception:
+    except ValueError:
         return 0
 
 
@@ -496,7 +500,7 @@ def send_reset_email(token: str) -> bool:
     msg["To"] = ADMIN_EMAIL
     try:
         context = ssl.create_default_context()
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30) as server:
             server.ehlo()
             server.starttls(context=context)
             server.ehlo()
@@ -1065,7 +1069,7 @@ def admin_logout():
 def forgot_password_page(request: Request):
     return templates.TemplateResponse(
         "forgot_password.html",
-        {"request": request, "admin_email": ADMIN_EMAIL, "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60},
+        {"request": request, "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60},
     )
 
 
@@ -1073,6 +1077,19 @@ def forgot_password_page(request: Request):
 def forgot_password_submit(request: Request):
     smtp_configured = bool(SMTP_USERNAME) and bool(SMTP_PASSWORD)
     reset_ttl_minutes = RESET_TOKEN_TTL_SECONDS // 60
+
+    if not SECRET_KEY:
+        return templates.TemplateResponse(
+            "forgot_password.html",
+            {
+                "request": request,
+                "sent": False,
+                "smtp_configured": False,
+                "secret_key_missing": True,
+                "reset_ttl_minutes": reset_ttl_minutes,
+            },
+        )
+
     cooldown_remaining = get_reset_cooldown_remaining()
     if cooldown_remaining > 0:
         return templates.TemplateResponse(
@@ -1080,7 +1097,6 @@ def forgot_password_submit(request: Request):
             {
                 "request": request,
                 "cooldown": cooldown_remaining,
-                "admin_email": ADMIN_EMAIL,
                 "smtp_configured": smtp_configured,
                 "reset_ttl_minutes": reset_ttl_minutes,
             },
@@ -1094,7 +1110,6 @@ def forgot_password_submit(request: Request):
         {
             "request": request,
             "sent": sent,
-            "admin_email": ADMIN_EMAIL,
             "smtp_configured": smtp_configured,
             "reset_ttl_minutes": reset_ttl_minutes,
         },
