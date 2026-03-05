@@ -100,7 +100,7 @@ function phaseLabelText(phaseLabel){
 
 function setPhaseAndStage(session){
   const phaseBadge = document.getElementById("phase_badge");
-  phaseBadge.innerText = `${phaseLabelText(session.phase_label)} ${session.phase_round}/10`;
+  phaseBadge.innerText = `${phaseLabelText(session.phase_label)} ${session.phase_round}`;
   const stageBadge = document.getElementById("stage_badge");
   stageBadge.innerText = stageText(session.stage);
   stageBadge.className = "pill " + (session.stage === "contribution" ? "ok" : (session.stage === "action" ? "warn" : "muted"));
