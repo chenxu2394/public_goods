@@ -1,35 +1,35 @@
 {% extends "_base.html" %}
-{% set heading = "Student Page" %}
+{% set heading = "Student Page / 学生页面" %}
 {% set subheading = sess.title %}
 {% block top_right %}
-  <span class="pill">Anonymous ID {{ stu.anonymous_id }}</span>
+  <span class="pill">Anonymous ID / 匿名编号 {{ stu.anonymous_id }}</span>
 {% endblock %}
 {% block content %}
 <div class="card">
-  <div><b>Experiment ID:</b> <span class="mono" id="anon_id">{{ stu.anonymous_id }}</span></div>
-  <div>Group: <span id="group_no">{% if stu.group_no %}{{ stu.group_no }}{% else %}Pending assignment{% endif %}</span></div>
-  <div class="muted">This page auto-refreshes. You only see anonymous IDs for group members.</div>
+  <div><b>Experiment ID / 实验编号:</b> <span class="mono" id="anon_id">{{ stu.anonymous_id }}</span></div>
+  <div>Group / 组别: <span id="group_no">{% if stu.group_no %}{{ stu.group_no }}{% else %}Pending assignment / 待分组{% endif %}</span></div>
+  <div class="muted">This page auto-refreshes. You only see anonymous IDs for group members. / 本页面会自动刷新。你只能看到组员的匿名编号。</div>
 </div>
 
 <div class="card">
-  <h3>Current Round</h3>
+  <h3>Current Round / 当前轮次</h3>
   <div>
-    Total round: <b id="cur_round">{{ sess.current_round }}</b> / {{ sess.rounds }}
+    Total round / 总轮次: <b id="cur_round">{{ sess.current_round }}</b> / {{ sess.rounds }}
     <span class="pill" id="phase_badge">-</span>
     <span class="pill" id="stage_badge">-</span>
   </div>
 
   <div style="margin-top:12px;" id="contrib_wrap">
-    <h4 style="margin:0 0 8px 0;">Contribution</h4>
+    <h4 style="margin:0 0 8px 0;">Contribution / 贡献</h4>
     <form id="submit_form">
       <input type="hidden" name="student_id" value="{{ stu.student_id }}"/>
       <div class="row">
         <div class="col">
-          <div class="muted">Contribution (0-{{ sess.endowment }})</div>
+          <div class="muted">Contribution / 贡献 (0-{{ sess.endowment }})</div>
           <input name="contrib" id="contrib" type="number" min="0" max="{{ sess.endowment }}" value="0"/>
         </div>
         <div class="col" style="align-self:flex-end;">
-          <button type="submit" id="contrib_submit_btn">Submit / Update Contribution</button>
+          <button type="submit" id="contrib_submit_btn">Submit / Update Contribution / 提交 / 更新贡献</button>
         </div>
         <div class="col" style="align-self:flex-end;">
           <span id="submit_msg" class="muted"></span>
@@ -39,14 +39,14 @@
   </div>
 
   <div style="margin-top:12px;" id="action_wrap">
-    <h4 style="margin:0 0 8px 0;" id="action_title">Reward / Punishment</h4>
+    <h4 style="margin:0 0 8px 0;" id="action_title">Reward / Punishment / 奖励 / 惩罚</h4>
     <div class="muted" id="action_desc"></div>
     <form id="action_form" style="margin-top:8px;">
       <table id="action_table">
-        <tr><th>Anonymous ID</th><th>Points</th></tr>
+        <tr><th>Anonymous ID / 匿名编号</th><th>Points / 点数</th></tr>
       </table>
       <div style="margin-top:8px;">
-        <button type="submit" id="action_submit_btn">Submit / Update Actions</button>
+        <button type="submit" id="action_submit_btn">Submit / Update Actions / 提交 / 更新操作</button>
         <span id="action_msg" class="muted" style="margin-left:10px;"></span>
       </div>
     </form>
@@ -54,28 +54,28 @@
 </div>
 
 <div class="card">
-  <h3>Current Group Anonymous Contributions</h3>
-  <div class="muted">Only anonymous ID + contribution are shown.</div>
+  <h3>Current Group Anonymous Contributions / 当前小组匿名贡献</h3>
+  <div class="muted">Only anonymous ID + contribution are shown. / 仅显示匿名编号与贡献。</div>
   <table id="group_table" style="margin-top:8px;">
-    <tr><th>ID</th><th>Contribution</th></tr>
+    <tr><th>ID / 编号</th><th>Contribution / 贡献</th></tr>
   </table>
 </div>
 
 <div class="card">
-  <h3>Latest Round Feedback</h3>
-  <div class="muted">After each round is computed, the latest result appears here automatically.</div>
+  <h3>Latest Round Feedback / 最新轮次反馈</h3>
+  <div class="muted">After each round is computed, the latest result appears here automatically. / 每轮结算后，最新结果会自动显示在这里。</div>
   <table id="latest_table" style="margin-top:8px;">
-    <tr><th>Total Round</th><th>Institution</th><th>Institution Round</th><th>Your Contribution</th><th>Group Total</th><th>Income</th><th>Cumulative</th></tr>
+    <tr><th>Total Round / 总轮次</th><th>Institution / 制度</th><th>Institution Round / 制度内轮次</th><th>Your Contribution / 你的贡献</th><th>Group Total / 组总贡献</th><th>Income / 收益</th><th>Cumulative / 累计收益</th></tr>
   </table>
 </div>
 
 <div class="card">
-  <h3>Income History</h3>
-  <div class="muted">After round 30 is computed, cumulative income is your final total payoff.</div>
+  <h3>Income History / 收益历史</h3>
+  <div class="muted">After round 30 is computed, cumulative income is your final total payoff. / 第30轮结算后，累计收益即为你的最终总报酬。</div>
   <div style="overflow:auto; margin-top:10px;">
     <table id="hist_table">
       <tr>
-        <th>Total Round</th><th>Institution</th><th>Institution Round</th><th>Your Contribution</th><th>Group Total</th><th>Income</th><th>Cumulative</th><th>Computed at</th>
+        <th>Total Round / 总轮次</th><th>Institution / 制度</th><th>Institution Round / 制度内轮次</th><th>Your Contribution / 你的贡献</th><th>Group Total / 组总贡献</th><th>Income / 收益</th><th>Cumulative / 累计收益</th><th>Computed at / 结算时间</th>
       </tr>
     </table>
   </div>
@@ -86,14 +86,21 @@ const sessionId = "{{ sess.id }}";
 const studentId = "{{ stu.student_id }}";
 
 function stageText(stage){
-  if(stage === "contribution") return "Contribution Open";
-  if(stage === "action") return "Action Stage Open";
-  return "Round Closed";
+  if(stage === "contribution") return "Contribution Open / 贡献阶段开放";
+  if(stage === "action") return "Action Stage Open / 操作阶段开放";
+  return "Round Closed / 本轮已关闭";
+}
+
+function phaseLabelText(phaseLabel){
+  if(phaseLabel === "Baseline") return "Baseline / 基础阶段";
+  if(phaseLabel === "Reward") return "Reward / 奖励阶段";
+  if(phaseLabel === "Punishment") return "Punishment / 惩罚阶段";
+  return phaseLabel;
 }
 
 function setPhaseAndStage(session){
   const phaseBadge = document.getElementById("phase_badge");
-  phaseBadge.innerText = `${session.phase_label} ${session.phase_round}/10`;
+  phaseBadge.innerText = `${phaseLabelText(session.phase_label)} ${session.phase_round}/10`;
   const stageBadge = document.getElementById("stage_badge");
   stageBadge.innerText = stageText(session.stage);
   stageBadge.className = "pill " + (session.stage === "contribution" ? "ok" : (session.stage === "action" ? "warn" : "muted"));
@@ -165,11 +172,11 @@ function renderActionTargets(data){
 
   wrap.style.display = "block";
   if(data.session.phase === "reward"){
-    title.innerText = "Reward Stage";
-    desc.innerText = "Each reward point costs you 1 and gives the target +2 income.";
+    title.innerText = "Reward Stage / 奖励阶段";
+    desc.innerText = "Each reward point costs you 1 and gives the target +2 income. / 每给予1点奖励，你支付1点，被奖励者增加2点收益。";
   }else{
-    title.innerText = "Punishment Stage";
-    desc.innerText = "Each punishment point costs you 1 and reduces the target by 3.";
+    title.innerText = "Punishment Stage / 惩罚阶段";
+    desc.innerText = "Each punishment point costs you 1 and reduces the target by 3. / 每给予1点惩罚，你支付1点，被惩罚者减少3点收益。";
   }
 
   data.action_targets.forEach(t => {
@@ -195,16 +202,16 @@ async function fetchStatus(){
   const data = await res.json();
 
   document.getElementById("cur_round").innerText = data.session.current_round;
-  document.getElementById("group_no").innerText = data.student.group_no ?? "Pending assignment";
+  document.getElementById("group_no").innerText = data.student.group_no ?? "Pending assignment / 待分组";
   document.getElementById("anon_id").innerText = data.student.anonymous_id;
 
   setPhaseAndStage(data.session);
 
   const msg = document.getElementById("submit_msg");
   if(data.current_round.submitted_contrib !== null){
-    msg.innerText = `Submitted contribution: ${data.current_round.submitted_contrib}`;
+    msg.innerText = `Submitted contribution / 已提交贡献: ${data.current_round.submitted_contrib}`;
   } else {
-    msg.innerText = data.session.stage === "contribution" ? "Not submitted yet" : "Contribution stage closed";
+    msg.innerText = data.session.stage === "contribution" ? "Not submitted yet / 尚未提交" : "Contribution stage closed / 贡献阶段已关闭";
   }
 
   const contribInput = document.getElementById("contrib");
@@ -226,10 +233,10 @@ document.getElementById("submit_form").addEventListener("submit", async (e) => {
   const msg = document.getElementById("submit_msg");
   if(res.ok){
     const data = await res.json();
-    msg.innerText = `Submitted contribution: ${data.contrib}`;
+    msg.innerText = `Submitted contribution / 已提交贡献: ${data.contrib}`;
   } else {
     const t = await res.text();
-    msg.innerText = `Submit failed: ${t}`;
+    msg.innerText = `Submit failed / 提交失败: ${t}`;
   }
   await fetchStatus();
 });
@@ -250,10 +257,10 @@ document.getElementById("action_form").addEventListener("submit", async (e) => {
 
   const msg = document.getElementById("action_msg");
   if(res.ok){
-    msg.innerText = "Action submission saved.";
+    msg.innerText = "Action submission saved. / 操作提交已保存。";
   } else {
     const t = await res.text();
-    msg.innerText = `Submit failed: ${t}`;
+    msg.innerText = `Submit failed / 提交失败: ${t}`;
   }
   await fetchStatus();
 });
