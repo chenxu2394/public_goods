@@ -71,7 +71,7 @@
 
 <div class="card">
   <h3>Income History / 收益历史</h3>
-  <div class="muted">After round 30 is computed, cumulative income is your final total payoff. / 第30轮结算后，累计收益即为你的最终总报酬。</div>
+  <div class="muted">After round {{ sess.rounds }} is computed, cumulative income is your final total payoff. / 第{{ sess.rounds }}轮结算后，累计收益即为你的最终总报酬。</div>
   <div style="overflow:auto; margin-top:10px;">
     <table id="hist_table">
       <tr>
