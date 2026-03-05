@@ -382,8 +382,8 @@ def verify_admin_token(token: str) -> bool:
                 if ts < int(epoch_data.strip()):
                     return False
             except ValueError:
-                # Malformed epoch data — treat as no epoch (allow token)
-                pass
+                # Malformed epoch data — fail closed to avoid keeping old sessions alive
+                return False
         return True
     except Exception:
         return False
