@@ -12,6 +12,8 @@ import hmac
 import hashlib
 import random
 import math
+import smtplib
+from email.mime.text import MIMEText
 from typing import List, Dict, Tuple, Optional
 
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
@@ -37,6 +39,17 @@ ADMIN_COOKIE_SECURE = os.environ.get("ADMIN_COOKIE_SECURE", "1").strip().lower()
 }
 
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://public-goods.azurewebsites.net").rstrip("/")
+
+# Password reset
+ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "tingjiachen@outlook.com")
+RESET_TOKEN_TTL_SECONDS = 10 * 60  # 10 minutes
+
+# SMTP configuration (set these in Azure App Settings)
+SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.office365.com")
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "")
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+SMTP_FROM = os.environ.get("SMTP_FROM", "")  # defaults to SMTP_USERNAME if not set
 
 PHASE_ROUNDS = 10
 PHASES = ("baseline", "reward", "punishment")
@@ -402,6 +415,65 @@ def check_admin_password(entered: str) -> bool:
     if stored_hash is not None:
         return hmac.compare_digest(stored_hash, _hash_password(entered))
     return entered == ADMIN_PASSWORD
+
+
+# ---------------- Password reset ----------------
+
+def store_reset_token(token: str) -> None:
+    """Store a password reset token with an expiry timestamp."""
+    expires_at = int(dt.datetime.now().timestamp()) + RESET_TOKEN_TTL_SECONDS
+    set_setting("password_reset_token", json.dumps({"token": token, "expires_at": expires_at}))
+
+
+def verify_reset_token(token: str) -> bool:
+    """Return True if the token exists and has not expired."""
+    data = get_setting("password_reset_token")
+    if not data:
+        return False
+    try:
+        obj = json.loads(data)
+        if not hmac.compare_digest(obj.get("token", ""), token):
+            return False
+        if int(dt.datetime.now().timestamp()) > int(obj.get("expires_at", 0)):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def invalidate_reset_token() -> None:
+    """Delete any stored password reset token."""
+    conn = db()
+    try:
+        conn.execute("DELETE FROM settings WHERE key = 'password_reset_token'")
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def send_reset_email(token: str) -> bool:
+    """Send a password reset email to the admin. Returns True on success."""
+    if not SMTP_USERNAME or not SMTP_PASSWORD:
+        return False
+    reset_url = f"{PUBLIC_BASE_URL}/admin/reset_password/{token}"
+    body = (
+        "You have requested a password reset for the Public Goods Experiment admin panel.\n\n"
+        "Click the link below to reset your password:\n\n"
+        f"{reset_url}\n\n"
+        "This link is valid for 10 minutes. If you did not request this, please ignore this email."
+    )
+    msg = MIMEText(body)
+    msg["Subject"] = "Password Reset - Public Goods Experiment"
+    msg["From"] = SMTP_FROM or SMTP_USERNAME
+    msg["To"] = ADMIN_EMAIL
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(msg)
+        return True
+    except Exception:
+        return False
 
 
 def is_admin(request: Request) -> bool:
@@ -956,6 +1028,69 @@ def admin_logout():
     resp = RedirectResponse(url="/admin/login", status_code=303)
     resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
     return resp
+
+
+@app.get("/admin/forgot_password", response_class=HTMLResponse)
+def forgot_password_page(request: Request):
+    return templates.TemplateResponse(
+        "forgot_password.html", {"request": request, "admin_email": ADMIN_EMAIL}
+    )
+
+
+@app.post("/admin/forgot_password", response_class=HTMLResponse)
+def forgot_password_submit(request: Request):
+    token = secrets.token_urlsafe(32)
+    store_reset_token(token)
+    sent = send_reset_email(token)
+    smtp_configured = bool(SMTP_USERNAME) and bool(SMTP_PASSWORD)
+    return templates.TemplateResponse(
+        "forgot_password.html",
+        {
+            "request": request,
+            "sent": sent,
+            "admin_email": ADMIN_EMAIL,
+            "smtp_configured": smtp_configured,
+        },
+    )
+
+
+@app.get("/admin/reset_password/{token}", response_class=HTMLResponse)
+def reset_password_page(request: Request, token: str):
+    valid = verify_reset_token(token)
+    return templates.TemplateResponse(
+        "reset_password.html",
+        {"request": request, "valid": valid, "token": token},
+    )
+
+
+@app.post("/admin/reset_password/{token}", response_class=HTMLResponse)
+def reset_password_submit(
+    request: Request,
+    token: str,
+    new_password: str = Form(...),
+    confirm_password: str = Form(...),
+):
+    if not verify_reset_token(token):
+        return templates.TemplateResponse(
+            "reset_password.html",
+            {"request": request, "valid": False, "token": token},
+            status_code=400,
+        )
+    if not new_password:
+        return templates.TemplateResponse(
+            "reset_password.html",
+            {"request": request, "valid": True, "token": token, "error": "Password must not be empty."},
+            status_code=400,
+        )
+    if new_password != confirm_password:
+        return templates.TemplateResponse(
+            "reset_password.html",
+            {"request": request, "valid": True, "token": token, "error": "Passwords do not match."},
+            status_code=400,
+        )
+    set_setting("admin_password_hash", _hash_password(new_password))
+    invalidate_reset_token()
+    return RedirectResponse(url="/admin/login?pw_changed=1", status_code=303)
 
 
 @app.post("/admin/change_password")
