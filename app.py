@@ -490,16 +490,19 @@ def get_reset_cooldown_remaining() -> int:
         return 0
 
 
-def invalidate_reset_token() -> None:
-    """Delete any stored password reset token."""
+def delete_setting(key: str) -> None:
+    """Delete a setting by key."""
     conn = db()
     try:
-        conn.execute("DELETE FROM settings WHERE key = 'password_reset_token'")
+        conn.execute("DELETE FROM settings WHERE key = ?", (key,))
         conn.commit()
     finally:
         conn.close()
 
 
+def invalidate_reset_token() -> None:
+    """Delete any stored password reset token."""
+    delete_setting("password_reset_token")
 def send_reset_email(token: str) -> bool:
     """Send a password reset email to the admin. Returns True on success."""
     if not SMTP_USERNAME or not SMTP_PASSWORD:
