@@ -113,27 +113,29 @@
   {% if sessions|length == 0 %}
     <div class="muted">No sessions yet. Create one first.</div>
   {% else %}
-    <table>
-      <tr><th>Created at</th><th>Title</th><th>Parameters</th><th>Status</th><th>Open</th><th>Delete</th></tr>
-      {% for s in sessions %}
-        <tr>
-          <td class="mono">{{ s.created_at }}</td>
-          <td>{{ s.title }}</td>
-          <td>group size={{ s.group_size }}; multiplier={{ s.multiplier }}; endowment={{ s.endowment }}; rounds={{ s.rounds }}</td>
-          <td>
-            {% if s.locked == 1 %}<span class="pill ok">Groups locked</span>{% else %}<span class="pill warn">Unlocked</span>{% endif %}
-            {% if s.round_open == 1 %}<span class="pill ok">Contribution open</span>{% elif s.action_open == 1 %}<span class="pill warn">Action open</span>{% else %}<span class="pill muted">Round closed</span>{% endif %}
-            <span class="pill">Current round {{ s.current_round }}</span>
-          </td>
-          <td><a href="/admin/{{ s.id }}">Manage</a></td>
-          <td>
-            <form method="post" action="/admin/{{ s.id }}/delete">
-              <button type="button" onclick='openDeleteModal(this.form, {{ s.title|tojson }})'>Delete</button>
-            </form>
-          </td>
-        </tr>
-      {% endfor %}
-    </table>
+    <div class="table-scroll">
+      <table>
+        <tr><th>Created at</th><th>Title</th><th>Parameters</th><th>Status</th><th>Open</th><th>Delete</th></tr>
+        {% for s in sessions %}
+          <tr>
+            <td class="mono">{{ s.created_at }}</td>
+            <td>{{ s.title }}</td>
+            <td>group size={{ s.group_size }}; multiplier={{ s.multiplier }}; endowment={{ s.endowment }}; rounds={{ s.rounds }}</td>
+            <td>
+              {% if s.locked == 1 %}<span class="pill ok">Groups locked</span>{% else %}<span class="pill warn">Unlocked</span>{% endif %}
+              {% if s.round_open == 1 %}<span class="pill ok">Contribution open</span>{% elif s.action_open == 1 %}<span class="pill warn">Action open</span>{% else %}<span class="pill muted">Round closed</span>{% endif %}
+              <span class="pill">Current round {{ s.current_round }}</span>
+            </td>
+            <td><a href="/admin/{{ s.id }}">Manage</a></td>
+            <td>
+              <form method="post" action="/admin/{{ s.id }}/delete">
+                <button type="button" onclick='openDeleteModal(this.form, {{ s.title|tojson }})'>Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
+    </div>
   {% endif %}
 </div>
 {% endblock %}
