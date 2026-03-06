@@ -989,8 +989,8 @@ def _startup():
 
 
 @app.get("/", response_class=HTMLResponse)
-def home():
-    return RedirectResponse(url="/admin", status_code=302)
+def home(request: Request):
+    return templates.TemplateResponse("home.html", {"request": request})
 
 
 # ---------------- Admin login/logout ----------------
