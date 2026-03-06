@@ -15,6 +15,7 @@ import random
 import math
 import smtplib
 import ssl
+import logging
 from email.mime.text import MIMEText
 from typing import List, Dict, Tuple, Optional
 
@@ -22,6 +23,7 @@ from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
+logger = logging.getLogger(__name__)
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -694,6 +696,7 @@ def send_reset_email(token: str) -> bool:
             server.send_message(msg)
         return True
     except Exception:
+        logger.exception("Failed to send password-reset email via %s:%s", SMTP_SERVER, SMTP_PORT)
         return False
 
 
@@ -1333,6 +1336,7 @@ def forgot_password_submit(request: Request):
         try:
             _store_reset_token_and_record_send(token)  # atomic: token hash + send timestamp
         except Exception:
+            logger.exception("DB write failed after successful reset-email send")
             # DB write failed after a successful email send — treat as not sent so the
             # UI does not report success and the emailed link (which would not validate)
             # is not acted upon.
