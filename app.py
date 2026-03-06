@@ -414,7 +414,7 @@ def verify_admin_token(token: str) -> bool:
                         # Malformed epoch data — fail closed to avoid keeping old sessions alive
                         return False
                     _password_epoch_cache_ts = time.monotonic()
-        if _password_epoch_cache is not None and ts < _password_epoch_cache:
+        if _password_epoch_cache is not None and ts <= _password_epoch_cache:
             return False
         return True
     except Exception:
