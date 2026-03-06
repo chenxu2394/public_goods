@@ -30,7 +30,7 @@ DEFAULT_DB_PATH = "/home/public_goods.db"
 DB_PATH = os.environ.get("PUBLIC_GOODS_DB_PATH", DEFAULT_DB_PATH)
 
 # Admin protection
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+ADMIN_PASSWORD = (os.environ.get("ADMIN_PASSWORD") or "").strip()
 SECRET_KEY = os.environ.get("SECRET_KEY", "").strip()  # used to sign admin cookie tokens
 ADMIN_COOKIE_NAME = "pg_admin"
 ADMIN_TOKEN_TTL_SECONDS = 12 * 3600  # 12 hours
