@@ -42,20 +42,24 @@ ADMIN_COOKIE_SECURE = os.environ.get("ADMIN_COOKIE_SECURE", "1").strip().lower()
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://public-goods.azurewebsites.net").rstrip("/")
 
 # SMTP configuration (set these in Azure App Settings)
-SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.office365.com")
+SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.office365.com").strip()
 _smtp_port_raw = os.environ.get("SMTP_PORT", "587")
 try:
     SMTP_PORT = int(_smtp_port_raw.strip())
 except (TypeError, ValueError):
     SMTP_PORT = 587
-SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
-SMTP_FROM = os.environ.get("SMTP_FROM", "")  # defaults to SMTP_USERNAME if not set
+if not (1 <= SMTP_PORT <= 65535):
+    SMTP_PORT = 587
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
+SMTP_FROM = os.environ.get("SMTP_FROM", "").strip()  # defaults to SMTP_USERNAME if not set
 
 # Password reset
-ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL") or SMTP_USERNAME
+# ADMIN_EMAIL: use the env var (stripped) if provided; fall back to SMTP_USERNAME if absent or whitespace.
+ADMIN_EMAIL = (os.environ.get("ADMIN_EMAIL") or "").strip() or SMTP_USERNAME
 RESET_TOKEN_TTL_SECONDS = 10 * 60  # 10 minutes
-RESET_COOLDOWN_SECONDS = 60  # minimum gap between reset requests
+RESET_COOLDOWN_SECONDS = 60  # minimum gap between successful reset email sends
+RESET_ATTEMPT_COOLDOWN_SECONDS = 30  # rate-limit all reset attempts, including failed ones
 
 PHASE_ROUNDS = 10
 PHASES = ("baseline", "reward", "punishment")
@@ -361,7 +365,16 @@ def make_admin_token() -> str:
     return f"{body}.{sig}"
 
 
+# In-memory cache for password_changed_at epoch — avoids a DB hit on every admin request.
+# Populated lazily on the first verify_admin_token call; updated immediately by _update_password_epoch().
+# Under CPython's GIL, simple integer reads/writes are atomic, so no explicit lock is needed
+# for single-process deployments. Multi-process deployments still fall back to the DB correctly
+# because each process initialises _password_epoch_cache=None and populates it from the DB on first use.
+_password_epoch_cache: Optional[int] = None
+
+
 def verify_admin_token(token: str) -> bool:
+    global _password_epoch_cache
     try:
         _must_configure_admin()
         if not token or "." not in token:
@@ -375,15 +388,20 @@ def verify_admin_token(token: str) -> bool:
         now_ts = int(dt.datetime.now().timestamp())
         if ts <= 0 or now_ts - ts > ADMIN_TOKEN_TTL_SECONDS:
             return False
-        # Reject tokens issued before the last password change (server-side revocation)
-        epoch_data = get_setting("password_changed_at")
-        if epoch_data:
-            try:
-                if ts < int(epoch_data.strip()):
+        # Reject tokens issued before the last password change (server-side revocation).
+        # Use in-memory cache if populated; otherwise query DB and populate the cache.
+        epoch = _password_epoch_cache
+        if epoch is None:
+            epoch_data = get_setting("password_changed_at")
+            if epoch_data:
+                try:
+                    epoch = int(epoch_data.strip())
+                    _password_epoch_cache = epoch
+                except ValueError:
+                    # Malformed epoch data — fail closed to avoid keeping old sessions alive
                     return False
-            except ValueError:
-                # Malformed epoch data — fail closed to avoid keeping old sessions alive
-                return False
+        if epoch is not None and ts < epoch:
+            return False
         return True
     except Exception:
         return False
@@ -391,7 +409,10 @@ def verify_admin_token(token: str) -> bool:
 
 def _update_password_epoch() -> None:
     """Record the current timestamp as the password-changed epoch for session revocation."""
-    set_setting("password_changed_at", str(int(dt.datetime.now().timestamp())))
+    global _password_epoch_cache
+    now = int(dt.datetime.now().timestamp())
+    set_setting("password_changed_at", str(now))
+    _password_epoch_cache = now
 
 
 def _hash_password(password: str) -> str:
@@ -441,24 +462,39 @@ def check_admin_password(entered: str) -> bool:
 
 def _hmac_token(token: str) -> str:
     """Return HMAC-SHA256 hex digest of a reset token using SECRET_KEY."""
-    return hmac.new(SECRET_KEY.encode(), token.encode(), hashlib.sha256).hexdigest()
+    return hmac.new(SECRET_KEY.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def record_reset_attempt() -> None:
-    """Record the current time as the last successful reset email send, to enforce cooldown between sends."""
-    set_setting("password_reset_last_sent", str(int(dt.datetime.now().timestamp())))
+    """Record the current time as the last reset attempt (for DoS rate-limiting, regardless of success)."""
+    set_setting("password_reset_last_attempt", str(int(dt.datetime.now().timestamp())))
 
 
-def store_reset_token(token: str) -> None:
-    """Store the HMAC of a password reset token with an expiry timestamp."""
+def _store_reset_token_and_record_send(token: str) -> None:
+    """Atomically store the HMAC reset token hash and record the successful send timestamp.
+
+    Uses a single DB connection and commit so that both settings are written together.
+    This prevents the race where the process crashes between two separate set_setting() calls,
+    leaving the admin with a cooldown timestamp but no stored token (or vice versa).
+    """
     now = int(dt.datetime.now().timestamp())
-    set_setting(
-        "password_reset_token",
-        json.dumps({
-            "token_hash": _hmac_token(token),
-            "expires_at": now + RESET_TOKEN_TTL_SECONDS,
-        }),
+    upsert_sql = (
+        "INSERT INTO settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
     )
+    conn = db()
+    try:
+        conn.execute(upsert_sql, (
+            "password_reset_token",
+            json.dumps({
+                "token_hash": _hmac_token(token),
+                "expires_at": now + RESET_TOKEN_TTL_SECONDS,
+            }),
+        ))
+        conn.execute(upsert_sql, ("password_reset_last_sent", str(now)))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def verify_reset_token(token: str) -> bool:
@@ -478,13 +514,26 @@ def verify_reset_token(token: str) -> bool:
 
 
 def get_reset_cooldown_remaining() -> int:
-    """Return seconds remaining in the per-request cooldown, or 0 if none."""
+    """Return seconds remaining in the post-send cooldown (set only after a successful send), or 0 if none."""
     data = get_setting("password_reset_last_sent")
     if not data:
         return 0
     try:
         last_sent = int(data.strip())
         cooldown_until = last_sent + RESET_COOLDOWN_SECONDS
+        return max(0, cooldown_until - int(dt.datetime.now().timestamp()))
+    except ValueError:
+        return 0
+
+
+def get_attempt_cooldown_remaining() -> int:
+    """Return seconds remaining in the per-attempt DoS cooldown (set before each SMTP attempt), or 0 if none."""
+    data = get_setting("password_reset_last_attempt")
+    if not data:
+        return 0
+    try:
+        last_attempt = int(data.strip())
+        cooldown_until = last_attempt + RESET_ATTEMPT_COOLDOWN_SECONDS
         return max(0, cooldown_until - int(dt.datetime.now().timestamp()))
     except ValueError:
         return 0
@@ -1119,22 +1168,41 @@ def forgot_password_submit(request: Request):
     if not SECRET_KEY:
         return _forgot_password_secret_key_error(request)
 
-    cooldown_remaining = get_reset_cooldown_remaining()
-    if cooldown_remaining > 0:
+    # Check send cooldown first: only set after a successful email send.
+    send_remaining = get_reset_cooldown_remaining()
+    if send_remaining > 0:
         return templates.TemplateResponse(
             "forgot_password.html",
             {
                 "request": request,
-                "cooldown": cooldown_remaining,
+                "cooldown": send_remaining,
                 "smtp_configured": smtp_configured,
                 "reset_ttl_minutes": reset_ttl_minutes,
             },
         )
+
+    # Check attempt cooldown: DoS guard, set before each SMTP attempt regardless of success.
+    attempt_remaining = get_attempt_cooldown_remaining()
+    if attempt_remaining > 0:
+        return templates.TemplateResponse(
+            "forgot_password.html",
+            {
+                "request": request,
+                "attempt_cooldown": attempt_remaining,
+                "smtp_configured": smtp_configured,
+                "reset_ttl_minutes": reset_ttl_minutes,
+            },
+        )
+
     token = secrets.token_urlsafe(32)
+    # record_reset_attempt() is intentionally placed here (after both cooldown checks but before
+    # send_reset_email).  Blocked requests return early before reaching this point, so the
+    # cooldown timestamp is only set once per genuine attempt.  Refreshing it on blocked requests
+    # would create a self-renewing window that never expires under sustained traffic.
+    record_reset_attempt()
     sent = send_reset_email(token)
     if sent:
-        record_reset_attempt()
-        store_reset_token(token)
+        _store_reset_token_and_record_send(token)  # atomic: token hash + send timestamp
     return templates.TemplateResponse(
         "forgot_password.html",
         {
