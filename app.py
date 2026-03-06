@@ -337,13 +337,22 @@ def init_db():
 
 # ---------------- Admin auth (signed cookie token) ----------------
 
+def _is_admin_configured() -> bool:
+    """Return True if the admin can log in (SECRET_KEY set AND either env ADMIN_PASSWORD or a
+    DB-stored password hash exists).  Used by both _must_configure_admin() and the login UI so
+    they stay consistent after a password-reset flow."""
+    if not SECRET_KEY:
+        return False
+    return bool(ADMIN_PASSWORD) or get_setting("admin_password_hash") is not None
+
+
 def _must_configure_admin() -> None:
     if not SECRET_KEY:
         raise HTTPException(500, "Server missing SECRET_KEY configuration.")
     # Accept either the env ADMIN_PASSWORD or a DB-stored hash (set via password reset).
     # This ensures admin login works after the forgot-password flow even when the
     # ADMIN_PASSWORD env var was never set.
-    if not ADMIN_PASSWORD and get_setting("admin_password_hash") is None:
+    if not _is_admin_configured():
         raise HTTPException(500, "Server missing ADMIN_PASSWORD configuration.")
 
 
@@ -363,7 +372,7 @@ def _sign(message: bytes) -> str:
 
 def make_admin_token() -> str:
     _must_configure_admin()
-    payload = {"ts": int(dt.datetime.now().timestamp())}
+    payload = {"ts": int(dt.datetime.now().timestamp() * 1000)}
     body = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     sig = _sign(body.encode("utf-8"))
     return f"{body}.{sig}"
@@ -391,8 +400,8 @@ def verify_admin_token(token: str) -> bool:
             return False
         payload = json.loads(_b64url_decode(body).decode("utf-8"))
         ts = int(payload.get("ts", 0))
-        now_ts = int(dt.datetime.now().timestamp())
-        if ts <= 0 or now_ts - ts > ADMIN_TOKEN_TTL_SECONDS:
+        now_ts = int(dt.datetime.now().timestamp() * 1000)
+        if ts <= 0 or now_ts - ts > ADMIN_TOKEN_TTL_SECONDS * 1000:
             return False
         # Reject tokens issued before the last password change (server-side revocation).
         # Refresh the cache from the DB if the cached value is stale (TTL expired) or absent.
@@ -425,16 +434,16 @@ def verify_admin_token(token: str) -> bool:
 
 
 def _update_password_epoch() -> None:
-    """Record the current timestamp as the password-changed epoch for session revocation."""
+    """Record the current timestamp (ms) as the password-changed epoch for session revocation."""
     global _password_epoch_cache, _password_epoch_cache_ts
-    now = int(dt.datetime.now().timestamp())
+    now = int(dt.datetime.now().timestamp() * 1000)
     set_setting("password_changed_at", str(now))
     _password_epoch_cache = now
     _password_epoch_cache_ts = time.monotonic()
 
 
 def _commit_password_change(new_hash: str, *, invalidate_token: bool = False) -> None:
-    """Atomically update the admin password hash and password_changed_at epoch.
+    """Atomically update the admin password hash and password_changed_at epoch (in ms).
 
     Performs all writes in a single DB transaction so that a crash between writes
     cannot leave the hash and epoch in inconsistent states.
@@ -443,7 +452,7 @@ def _commit_password_change(new_hash: str, *, invalidate_token: bool = False) ->
     deleted in the same transaction, preventing replay of a used reset link.
     """
     global _password_epoch_cache, _password_epoch_cache_ts
-    now = int(dt.datetime.now().timestamp())
+    now = int(dt.datetime.now().timestamp() * 1000)
     upsert_sql = (
         "INSERT INTO settings(key, value) VALUES(?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
@@ -457,6 +466,60 @@ def _commit_password_change(new_hash: str, *, invalidate_token: bool = False) ->
         conn.commit()
         _password_epoch_cache = now
         _password_epoch_cache_ts = time.monotonic()
+    finally:
+        conn.close()
+
+
+def _claim_and_commit_password_change(token: str, new_hash: str) -> bool:
+    """Atomically verify the reset token, change the password, and invalidate the token.
+
+    Uses BEGIN IMMEDIATE so that concurrent requests cannot both pass token verification
+    before either deletes the stored token (one-time-use guarantee under concurrency).
+
+    Returns True if the token was valid and the password was changed.
+    Returns False if the token was missing, expired, or already consumed.
+    """
+    global _password_epoch_cache, _password_epoch_cache_ts
+    now_ms = int(dt.datetime.now().timestamp() * 1000)
+    now_s = now_ms // 1000  # expires_at is stored in seconds by _store_reset_token_and_record_send
+    upsert_sql = (
+        "INSERT INTO settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+    )
+    conn = db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'password_reset_token'"
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+        try:
+            obj = json.loads(row["value"])
+            if not hmac.compare_digest(obj.get("token_hash", ""), _hmac_token(token)):
+                conn.rollback()
+                return False
+            if now_s > int(obj.get("expires_at", 0)):
+                conn.rollback()
+                return False
+        except Exception:
+            conn.rollback()
+            return False
+        # Token is valid — atomically update hash, epoch, and delete token.
+        conn.execute(upsert_sql, ("admin_password_hash", new_hash))
+        conn.execute(upsert_sql, ("password_changed_at", str(now_ms)))
+        conn.execute("DELETE FROM settings WHERE key = 'password_reset_token'")
+        conn.commit()
+        _password_epoch_cache = now_ms
+        _password_epoch_cache_ts = time.monotonic()
+        return True
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         conn.close()
 
@@ -1188,7 +1251,7 @@ def home():
 
 @app.get("/admin/login", response_class=HTMLResponse)
 def admin_login_page(request: Request):
-    configured = bool(ADMIN_PASSWORD) and bool(SECRET_KEY)
+    configured = _is_admin_configured()
     pw_changed = request.query_params.get("pw_changed") == "1"
     return templates.TemplateResponse(
         "admin_login.html", {"request": request, "configured": configured, "pw_changed": pw_changed}
@@ -1376,7 +1439,15 @@ def reset_password_submit(
             {"request": request, "valid": True, "token": token, "error": "Passwords do not match.", "reset_ttl_minutes": reset_ttl_minutes},
             status_code=400,
         )
-    _commit_password_change(_hash_password(new_password), invalidate_token=True)
+    # Atomically verify the token and commit the password change in a single BEGIN IMMEDIATE
+    # transaction, so concurrent requests cannot both consume the same one-time link.
+    if not _claim_and_commit_password_change(token, _hash_password(new_password)):
+        # Token was consumed by a concurrent request between the early check above and now.
+        return templates.TemplateResponse(
+            "reset_password.html",
+            {"request": request, "valid": False, "token": token, "reset_ttl_minutes": reset_ttl_minutes},
+            status_code=400,
+        )
     resp = RedirectResponse(url="/admin/login?pw_changed=1", status_code=303)
     resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
     return resp
