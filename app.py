@@ -668,34 +668,6 @@ def get_reset_cooldown_remaining() -> int:
         return 0
 
 
-def get_attempt_cooldown_remaining() -> int:
-    """Return seconds remaining in the per-attempt DoS cooldown (set before each SMTP attempt), or 0 if none."""
-    data = get_setting("password_reset_last_attempt")
-    if not data:
-        return 0
-    try:
-        last_attempt = int(data.strip())
-        cooldown_until = last_attempt + RESET_ATTEMPT_COOLDOWN_SECONDS
-        return max(0, cooldown_until - int(dt.datetime.now().timestamp()))
-    except ValueError:
-        return 0
-
-
-def delete_setting(key: str) -> None:
-    """Delete a setting by key."""
-    conn = db()
-    try:
-        conn.execute("DELETE FROM settings WHERE key = ?", (key,))
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def invalidate_reset_token() -> None:
-    """Delete any stored password reset token."""
-    delete_setting("password_reset_token")
-
-
 def send_reset_email(token: str) -> bool:
     """Send a password reset email to the admin. Returns True on success."""
     if not SMTP_SERVER or not SMTP_USERNAME or not SMTP_PASSWORD or not ADMIN_EMAIL:
