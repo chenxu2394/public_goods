@@ -4,6 +4,7 @@ import os
 import sqlite3
 import secrets
 import datetime as dt
+import time
 import csv
 import io
 import base64
@@ -12,6 +13,9 @@ import hmac
 import hashlib
 import random
 import math
+import smtplib
+import ssl
+from email.mime.text import MIMEText
 from typing import List, Dict, Tuple, Optional
 
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
@@ -26,8 +30,8 @@ DEFAULT_DB_PATH = "/home/public_goods.db"
 DB_PATH = os.environ.get("PUBLIC_GOODS_DB_PATH", DEFAULT_DB_PATH)
 
 # Admin protection
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
-SECRET_KEY = os.environ.get("SECRET_KEY", "")  # used to sign admin cookie tokens
+ADMIN_PASSWORD = (os.environ.get("ADMIN_PASSWORD") or "").strip()
+SECRET_KEY = os.environ.get("SECRET_KEY", "").strip()  # used to sign admin cookie tokens
 ADMIN_COOKIE_NAME = "pg_admin"
 ADMIN_TOKEN_TTL_SECONDS = 12 * 3600  # 12 hours
 ADMIN_COOKIE_SECURE = os.environ.get("ADMIN_COOKIE_SECURE", "1").strip().lower() not in {
@@ -37,6 +41,26 @@ ADMIN_COOKIE_SECURE = os.environ.get("ADMIN_COOKIE_SECURE", "1").strip().lower()
 }
 
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://public-goods.azurewebsites.net").rstrip("/")
+
+# SMTP configuration (set these in Azure App Settings)
+SMTP_SERVER = os.environ.get("SMTP_SERVER", "smtp.office365.com").strip()
+_smtp_port_raw = os.environ.get("SMTP_PORT", "587")
+try:
+    SMTP_PORT = int(_smtp_port_raw.strip())
+except (TypeError, ValueError):
+    SMTP_PORT = 587
+if not (1 <= SMTP_PORT <= 65535):
+    SMTP_PORT = 587
+SMTP_USERNAME = os.environ.get("SMTP_USERNAME", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
+SMTP_FROM = os.environ.get("SMTP_FROM", "").strip()  # defaults to SMTP_USERNAME if not set
+
+# Password reset
+# ADMIN_EMAIL: use the env var (stripped) if provided; fall back to SMTP_USERNAME if absent or whitespace.
+ADMIN_EMAIL = (os.environ.get("ADMIN_EMAIL") or "").strip() or SMTP_USERNAME
+RESET_TOKEN_TTL_SECONDS = 10 * 60  # 10 minutes
+RESET_COOLDOWN_SECONDS = 60  # minimum gap between successful reset email sends
+RESET_ATTEMPT_COOLDOWN_SECONDS = 30  # rate-limit all reset attempts, including failed ones
 
 PHASE_ROUNDS = 10
 PHASES = ("baseline", "reward", "punishment")
@@ -313,11 +337,23 @@ def init_db():
 
 # ---------------- Admin auth (signed cookie token) ----------------
 
+def _is_admin_configured() -> bool:
+    """Return True if the admin can log in (SECRET_KEY set AND either env ADMIN_PASSWORD or a
+    DB-stored password hash exists).  Used by both _must_configure_admin() and the login UI so
+    they stay consistent after a password-reset flow."""
+    if not SECRET_KEY:
+        return False
+    return bool(ADMIN_PASSWORD) or get_setting("admin_password_hash") is not None
+
+
 def _must_configure_admin() -> None:
-    if not ADMIN_PASSWORD:
-        raise HTTPException(500, "Server missing ADMIN_PASSWORD configuration.")
     if not SECRET_KEY:
         raise HTTPException(500, "Server missing SECRET_KEY configuration.")
+    # Accept either the env ADMIN_PASSWORD or a DB-stored hash (set via password reset).
+    # This ensures admin login works after the forgot-password flow even when the
+    # ADMIN_PASSWORD env var was never set.
+    if not _is_admin_configured():
+        raise HTTPException(500, "Server missing ADMIN_PASSWORD configuration.")
 
 
 def _b64url(data: bytes) -> str:
@@ -336,13 +372,24 @@ def _sign(message: bytes) -> str:
 
 def make_admin_token() -> str:
     _must_configure_admin()
-    payload = {"ts": int(dt.datetime.now().timestamp())}
+    payload = {"ts": int(dt.datetime.now().timestamp() * 1000)}
     body = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     sig = _sign(body.encode("utf-8"))
     return f"{body}.{sig}"
 
 
+# In-memory cache for password_changed_at epoch — reduces DB hits on admin requests.
+# The cache is refreshed from the DB at most once per _PASSWORD_EPOCH_CACHE_TTL_SECONDS so that
+# password changes made by another worker (in multi-process deployments) are picked up within
+# that window.  _update_password_epoch() always writes the DB *and* immediately updates the cache
+# for the current process, so revocation is instant in single-process deployments.
+_PASSWORD_EPOCH_CACHE_TTL_SECONDS = 30  # re-read DB if cache is older than this
+_password_epoch_cache: Optional[int] = None
+_password_epoch_cache_ts: float = float("-inf")  # time.monotonic() of last DB read; -inf means "never read"
+
+
 def verify_admin_token(token: str) -> bool:
+    global _password_epoch_cache, _password_epoch_cache_ts
     try:
         _must_configure_admin()
         if not token or "." not in token:
@@ -353,12 +400,119 @@ def verify_admin_token(token: str) -> bool:
             return False
         payload = json.loads(_b64url_decode(body).decode("utf-8"))
         ts = int(payload.get("ts", 0))
-        now_ts = int(dt.datetime.now().timestamp())
-        if ts <= 0 or now_ts - ts > ADMIN_TOKEN_TTL_SECONDS:
+        now_ts = int(dt.datetime.now().timestamp() * 1000)
+        if ts <= 0 or now_ts - ts > ADMIN_TOKEN_TTL_SECONDS * 1000:
+            return False
+        # Reject tokens issued before the last password change (server-side revocation).
+        # Refresh the cache from the DB if the cached value is stale (TTL expired) or absent.
+        cache_age = time.monotonic() - _password_epoch_cache_ts
+        if _password_epoch_cache is None or cache_age >= _PASSWORD_EPOCH_CACHE_TTL_SECONDS:
+            epoch_data = get_setting("password_changed_at")
+            # If the setting is missing (e.g. fresh DB), treat as "no password change yet"
+            # by using epoch 0. Genuine DB exceptions will still be caught by the outer try.
+            if epoch_data is None:
+                _password_epoch_cache = 0
+                _password_epoch_cache_ts = time.monotonic()
+            else:
+                epoch_str = str(epoch_data).strip()
+                if not epoch_str:
+                    # No password change recorded yet; treat as "no revocation epoch"
+                    _password_epoch_cache = 0
+                    _password_epoch_cache_ts = time.monotonic()
+                else:
+                    try:
+                        _password_epoch_cache = int(epoch_str)
+                    except ValueError:
+                        # Malformed epoch data — fail closed to avoid keeping old sessions alive
+                        return False
+                    _password_epoch_cache_ts = time.monotonic()
+        if _password_epoch_cache is not None and ts <= _password_epoch_cache:
             return False
         return True
     except Exception:
         return False
+
+
+def _commit_password_change(new_hash: str, *, invalidate_token: bool = False) -> None:
+    """Atomically update the admin password hash and password_changed_at epoch (in ms).
+
+    Performs all writes in a single DB transaction so that a crash between writes
+    cannot leave the hash and epoch in inconsistent states.
+
+    If *invalidate_token* is True, the ``password_reset_token`` setting is also
+    deleted in the same transaction, preventing replay of a used reset link.
+    """
+    global _password_epoch_cache, _password_epoch_cache_ts
+    now = int(dt.datetime.now().timestamp() * 1000)
+    upsert_sql = (
+        "INSERT INTO settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+    )
+    conn = db()
+    try:
+        conn.execute(upsert_sql, ("admin_password_hash", new_hash))
+        conn.execute(upsert_sql, ("password_changed_at", str(now)))
+        if invalidate_token:
+            conn.execute("DELETE FROM settings WHERE key = 'password_reset_token'")
+        conn.commit()
+        _password_epoch_cache = now
+        _password_epoch_cache_ts = time.monotonic()
+    finally:
+        conn.close()
+
+
+def _claim_and_commit_password_change(token: str, new_hash: str) -> bool:
+    """Atomically verify the reset token, change the password, and invalidate the token.
+
+    Uses BEGIN IMMEDIATE so that concurrent requests cannot both pass token verification
+    before either deletes the stored token (one-time-use guarantee under concurrency).
+
+    Returns True if the token was valid and the password was changed.
+    Returns False if the token was missing, expired, or already consumed.
+    """
+    global _password_epoch_cache, _password_epoch_cache_ts
+    now_ms = int(dt.datetime.now().timestamp() * 1000)
+    now_s = now_ms // 1000  # expires_at is stored in seconds by _store_reset_token_and_record_send
+    upsert_sql = (
+        "INSERT INTO settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+    )
+    conn = db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'password_reset_token'"
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return False
+        try:
+            obj = json.loads(row["value"])
+            if not hmac.compare_digest(obj.get("token_hash", ""), _hmac_token(token)):
+                conn.rollback()
+                return False
+            if now_s > int(obj.get("expires_at", 0)):
+                conn.rollback()
+                return False
+        except Exception:
+            conn.rollback()
+            return False
+        # Token is valid — atomically update hash, epoch, and delete token.
+        conn.execute(upsert_sql, ("admin_password_hash", new_hash))
+        conn.execute(upsert_sql, ("password_changed_at", str(now_ms)))
+        conn.execute("DELETE FROM settings WHERE key = 'password_reset_token'")
+        conn.commit()
+        _password_epoch_cache = now_ms
+        _password_epoch_cache_ts = time.monotonic()
+        return True
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        conn.close()
 
 
 def _hash_password(password: str) -> str:
@@ -402,6 +556,145 @@ def check_admin_password(entered: str) -> bool:
     if stored_hash is not None:
         return hmac.compare_digest(stored_hash, _hash_password(entered))
     return entered == ADMIN_PASSWORD
+
+
+# ---------------- Password reset ----------------
+
+def _hmac_token(token: str) -> str:
+    """Return HMAC-SHA256 hex digest of a reset token using SECRET_KEY."""
+    return hmac.new(SECRET_KEY.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def claim_reset_attempt() -> int:
+    """Atomically check the per-attempt DoS cooldown and claim a new attempt slot.
+
+    Uses BEGIN IMMEDIATE to acquire an exclusive write lock before the read-modify-write,
+    preventing concurrent requests from both passing the cooldown window.
+
+    Returns seconds remaining in the cooldown (0 if the attempt slot was successfully
+    claimed; >0 if still cooling down — the caller should back off).
+    """
+    now = int(dt.datetime.now().timestamp())
+    conn = db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'password_reset_last_attempt'"
+        ).fetchone()
+        if row is not None:
+            try:
+                last_attempt = int(row["value"].strip())
+                remaining = max(0, (last_attempt + RESET_ATTEMPT_COOLDOWN_SECONDS) - now)
+            except ValueError:
+                remaining = 0
+        else:
+            remaining = 0
+
+        if remaining > 0:
+            conn.rollback()
+            return remaining
+
+        # Claim the slot by writing the current timestamp.
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES('password_reset_last_attempt', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (str(now),),
+        )
+        conn.commit()
+        return 0
+    except sqlite3.Error:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        raise
+    finally:
+        conn.close()
+
+
+def _store_reset_token_and_record_send(token: str) -> None:
+    """Atomically store the HMAC reset token hash and record the successful send timestamp.
+
+    Uses a single DB connection and commit so that both settings are written together.
+    This prevents the race where the process crashes between two separate set_setting() calls,
+    leaving the admin with a cooldown timestamp but no stored token (or vice versa).
+    """
+    now = int(dt.datetime.now().timestamp())
+    upsert_sql = (
+        "INSERT INTO settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+    )
+    conn = db()
+    try:
+        conn.execute(upsert_sql, (
+            "password_reset_token",
+            json.dumps({
+                "token_hash": _hmac_token(token),
+                "expires_at": now + RESET_TOKEN_TTL_SECONDS,
+            }),
+        ))
+        conn.execute(upsert_sql, ("password_reset_last_sent", str(now)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def verify_reset_token(token: str) -> bool:
+    """Return True if the token exists and has not expired."""
+    data = get_setting("password_reset_token")
+    if not data:
+        return False
+    try:
+        obj = json.loads(data)
+        if not hmac.compare_digest(obj.get("token_hash", ""), _hmac_token(token)):
+            return False
+        if int(dt.datetime.now().timestamp()) > int(obj.get("expires_at", 0)):
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def get_reset_cooldown_remaining() -> int:
+    """Return seconds remaining in the post-send cooldown (set only after a successful send), or 0 if none."""
+    data = get_setting("password_reset_last_sent")
+    if not data:
+        return 0
+    try:
+        last_sent = int(data.strip())
+        cooldown_until = last_sent + RESET_COOLDOWN_SECONDS
+        return max(0, cooldown_until - int(dt.datetime.now().timestamp()))
+    except ValueError:
+        return 0
+
+
+def send_reset_email(token: str) -> bool:
+    """Send a password reset email to the admin. Returns True on success."""
+    if not SMTP_SERVER or not SMTP_USERNAME or not SMTP_PASSWORD or not ADMIN_EMAIL:
+        return False
+    reset_url = f"{PUBLIC_BASE_URL}/admin/reset_password/{token}"
+    ttl_minutes = RESET_TOKEN_TTL_SECONDS // 60
+    body = (
+        "You have requested a password reset for the Public Goods Experiment admin panel.\n\n"
+        "Click the link below to reset your password:\n\n"
+        f"{reset_url}\n\n"
+        f"This link is valid for {ttl_minutes} minutes. If you did not request this, please ignore this email."
+    )
+    msg = MIMEText(body)
+    msg["Subject"] = "Password Reset - Public Goods Experiment"
+    msg["From"] = SMTP_FROM or SMTP_USERNAME
+    msg["To"] = ADMIN_EMAIL
+    try:
+        context = ssl.create_default_context()
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=30) as server:
+            server.ehlo()
+            server.starttls(context=context)
+            server.ehlo()
+            server.login(SMTP_USERNAME, SMTP_PASSWORD)
+            server.send_message(msg)
+        return True
+    except Exception:
+        return False
 
 
 def is_admin(request: Request) -> bool:
@@ -921,7 +1214,7 @@ def home():
 
 @app.get("/admin/login", response_class=HTMLResponse)
 def admin_login_page(request: Request):
-    configured = bool(ADMIN_PASSWORD) and bool(SECRET_KEY)
+    configured = _is_admin_configured()
     pw_changed = request.query_params.get("pw_changed") == "1"
     return templates.TemplateResponse(
         "admin_login.html", {"request": request, "configured": configured, "pw_changed": pw_changed}
@@ -958,6 +1251,171 @@ def admin_logout():
     return resp
 
 
+def _forgot_password_secret_key_error(request: Request):
+    """Return a 503 template response when SECRET_KEY is not configured."""
+    return templates.TemplateResponse(
+        "forgot_password.html",
+        {
+            "request": request,
+            "secret_key_missing": True,
+            "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60,
+        },
+        status_code=503,
+    )
+
+
+@app.get("/admin/forgot_password", response_class=HTMLResponse)
+def forgot_password_page(request: Request):
+    if not SECRET_KEY:
+        return _forgot_password_secret_key_error(request)
+    return templates.TemplateResponse(
+        "forgot_password.html",
+        {"request": request, "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60},
+    )
+
+
+@app.post("/admin/forgot_password", response_class=HTMLResponse)
+def forgot_password_submit(request: Request):
+    smtp_configured = (
+        bool(SMTP_SERVER)
+        and bool(SMTP_USERNAME)
+        and bool(SMTP_PASSWORD)
+        and bool(ADMIN_EMAIL)
+    )
+    reset_ttl_minutes = RESET_TOKEN_TTL_SECONDS // 60
+
+    if not SECRET_KEY:
+        return _forgot_password_secret_key_error(request)
+
+    # Short-circuit early when SMTP is not configured: skip cooldown recording and token
+    # generation entirely so misconfigured servers never show "Too many requests".
+    if not smtp_configured:
+        return templates.TemplateResponse(
+            "forgot_password.html",
+            {
+                "request": request,
+                "sent": False,
+                "smtp_configured": False,
+                "reset_ttl_minutes": reset_ttl_minutes,
+            },
+        )
+
+    # Check send cooldown first: only set after a successful email send.
+    send_remaining = get_reset_cooldown_remaining()
+    if send_remaining > 0:
+        return templates.TemplateResponse(
+            "forgot_password.html",
+            {
+                "request": request,
+                "cooldown": send_remaining,
+                "smtp_configured": smtp_configured,
+                "reset_ttl_minutes": reset_ttl_minutes,
+            },
+        )
+
+    # Atomic attempt cooldown check-and-set: uses BEGIN IMMEDIATE so concurrent requests
+    # cannot both pass the cooldown window before either writes its timestamp.
+    attempt_remaining = claim_reset_attempt()
+    if attempt_remaining > 0:
+        return templates.TemplateResponse(
+            "forgot_password.html",
+            {
+                "request": request,
+                "attempt_cooldown": attempt_remaining,
+                "smtp_configured": smtp_configured,
+                "reset_ttl_minutes": reset_ttl_minutes,
+            },
+        )
+
+    token = secrets.token_urlsafe(32)
+    sent = send_reset_email(token)
+    if sent:
+        try:
+            _store_reset_token_and_record_send(token)  # atomic: token hash + send timestamp
+        except Exception:
+            # DB write failed after a successful email send — treat as not sent so the
+            # UI does not report success and the emailed link (which would not validate)
+            # is not acted upon.
+            sent = False
+    return templates.TemplateResponse(
+        "forgot_password.html",
+        {
+            "request": request,
+            "sent": sent,
+            "smtp_configured": smtp_configured,
+            "reset_ttl_minutes": reset_ttl_minutes,
+        },
+    )
+
+
+def _reset_password_secret_key_error(request: Request, token: str):
+    """Return a 503 template response when SECRET_KEY is not configured."""
+    return templates.TemplateResponse(
+        "reset_password.html",
+        {
+            "request": request,
+            "valid": False,
+            "secret_key_missing": True,
+            "token": token,
+            "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60,
+        },
+        status_code=503,
+    )
+
+
+@app.get("/admin/reset_password/{token}", response_class=HTMLResponse)
+def reset_password_page(request: Request, token: str):
+    if not SECRET_KEY:
+        return _reset_password_secret_key_error(request, token)
+    valid = verify_reset_token(token)
+    return templates.TemplateResponse(
+        "reset_password.html",
+        {"request": request, "valid": valid, "token": token, "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60},
+    )
+
+
+@app.post("/admin/reset_password/{token}", response_class=HTMLResponse)
+def reset_password_submit(
+    request: Request,
+    token: str,
+    new_password: str = Form(...),
+    confirm_password: str = Form(...),
+):
+    reset_ttl_minutes = RESET_TOKEN_TTL_SECONDS // 60
+    if not SECRET_KEY:
+        return _reset_password_secret_key_error(request, token)
+    if not verify_reset_token(token):
+        return templates.TemplateResponse(
+            "reset_password.html",
+            {"request": request, "valid": False, "token": token, "reset_ttl_minutes": reset_ttl_minutes},
+            status_code=400,
+        )
+    if not new_password:
+        return templates.TemplateResponse(
+            "reset_password.html",
+            {"request": request, "valid": True, "token": token, "error": "Password must not be empty.", "reset_ttl_minutes": reset_ttl_minutes},
+            status_code=400,
+        )
+    if new_password != confirm_password:
+        return templates.TemplateResponse(
+            "reset_password.html",
+            {"request": request, "valid": True, "token": token, "error": "Passwords do not match.", "reset_ttl_minutes": reset_ttl_minutes},
+            status_code=400,
+        )
+    # Atomically verify the token and commit the password change in a single BEGIN IMMEDIATE
+    # transaction, so concurrent requests cannot both consume the same one-time link.
+    if not _claim_and_commit_password_change(token, _hash_password(new_password)):
+        # Token was consumed by a concurrent request between the early check above and now.
+        return templates.TemplateResponse(
+            "reset_password.html",
+            {"request": request, "valid": False, "token": token, "reset_ttl_minutes": reset_ttl_minutes},
+            status_code=400,
+        )
+    resp = RedirectResponse(url="/admin/login?pw_changed=1", status_code=303)
+    resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
+    return resp
+
+
 @app.post("/admin/change_password")
 def admin_change_password(
     request: Request,
@@ -983,7 +1441,7 @@ def admin_change_password(
         return _render_error("New password must not be empty.")
     if new_password != confirm_password:
         return _render_error("New passwords do not match.")
-    set_setting("admin_password_hash", _hash_password(new_password))
+    _commit_password_change(_hash_password(new_password))
     resp = RedirectResponse(url="/admin/login?pw_changed=1", status_code=303)
     resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
     return resp
