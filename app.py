@@ -4,6 +4,7 @@ import os
 import sqlite3
 import secrets
 import datetime as dt
+import time
 import csv
 import io
 import base64
@@ -30,7 +31,7 @@ DB_PATH = os.environ.get("PUBLIC_GOODS_DB_PATH", DEFAULT_DB_PATH)
 
 # Admin protection
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
-SECRET_KEY = os.environ.get("SECRET_KEY", "")  # used to sign admin cookie tokens
+SECRET_KEY = os.environ.get("SECRET_KEY", "").strip()  # used to sign admin cookie tokens
 ADMIN_COOKIE_NAME = "pg_admin"
 ADMIN_TOKEN_TTL_SECONDS = 12 * 3600  # 12 hours
 ADMIN_COOKIE_SECURE = os.environ.get("ADMIN_COOKIE_SECURE", "1").strip().lower() not in {
@@ -365,16 +366,18 @@ def make_admin_token() -> str:
     return f"{body}.{sig}"
 
 
-# In-memory cache for password_changed_at epoch — avoids a DB hit on every admin request.
-# Populated lazily on the first verify_admin_token call; updated immediately by _update_password_epoch().
-# Under CPython's GIL, simple integer reads/writes are atomic, so no explicit lock is needed
-# for single-process deployments. Multi-process deployments still fall back to the DB correctly
-# because each process initialises _password_epoch_cache=None and populates it from the DB on first use.
+# In-memory cache for password_changed_at epoch — reduces DB hits on admin requests.
+# The cache is refreshed from the DB at most once per _PASSWORD_EPOCH_CACHE_TTL_SECONDS so that
+# password changes made by another worker (in multi-process deployments) are picked up within
+# that window.  _update_password_epoch() always writes the DB *and* immediately updates the cache
+# for the current process, so revocation is instant in single-process deployments.
+_PASSWORD_EPOCH_CACHE_TTL_SECONDS = 30  # re-read DB if cache is older than this
 _password_epoch_cache: Optional[int] = None
+_password_epoch_cache_ts: float = float("-inf")  # time.monotonic() of last DB read; -inf means "never read"
 
 
 def verify_admin_token(token: str) -> bool:
-    global _password_epoch_cache
+    global _password_epoch_cache, _password_epoch_cache_ts
     try:
         _must_configure_admin()
         if not token or "." not in token:
@@ -389,18 +392,20 @@ def verify_admin_token(token: str) -> bool:
         if ts <= 0 or now_ts - ts > ADMIN_TOKEN_TTL_SECONDS:
             return False
         # Reject tokens issued before the last password change (server-side revocation).
-        # Use in-memory cache if populated; otherwise query DB and populate the cache.
-        epoch = _password_epoch_cache
-        if epoch is None:
+        # Refresh the cache from the DB if the cached value is stale (TTL expired) or absent.
+        cache_age = time.monotonic() - _password_epoch_cache_ts
+        if _password_epoch_cache is None or cache_age >= _PASSWORD_EPOCH_CACHE_TTL_SECONDS:
             epoch_data = get_setting("password_changed_at")
             if epoch_data:
                 try:
-                    epoch = int(epoch_data.strip())
-                    _password_epoch_cache = epoch
+                    _password_epoch_cache = int(epoch_data.strip())
                 except ValueError:
                     # Malformed epoch data — fail closed to avoid keeping old sessions alive
                     return False
-        if epoch is not None and ts < epoch:
+            else:
+                _password_epoch_cache = None
+            _password_epoch_cache_ts = time.monotonic()
+        if _password_epoch_cache is not None and ts < _password_epoch_cache:
             return False
         return True
     except Exception:
@@ -409,10 +414,11 @@ def verify_admin_token(token: str) -> bool:
 
 def _update_password_epoch() -> None:
     """Record the current timestamp as the password-changed epoch for session revocation."""
-    global _password_epoch_cache
+    global _password_epoch_cache, _password_epoch_cache_ts
     now = int(dt.datetime.now().timestamp())
     set_setting("password_changed_at", str(now))
     _password_epoch_cache = now
+    _password_epoch_cache_ts = time.monotonic()
 
 
 def _hash_password(password: str) -> str:
@@ -556,7 +562,7 @@ def invalidate_reset_token() -> None:
 
 def send_reset_email(token: str) -> bool:
     """Send a password reset email to the admin. Returns True on success."""
-    if not SMTP_USERNAME or not SMTP_PASSWORD:
+    if not SMTP_SERVER or not SMTP_USERNAME or not SMTP_PASSWORD or not ADMIN_EMAIL:
         return False
     reset_url = f"{PUBLIC_BASE_URL}/admin/reset_password/{token}"
     ttl_minutes = RESET_TOKEN_TTL_SECONDS // 60
@@ -1162,7 +1168,12 @@ def forgot_password_page(request: Request):
 
 @app.post("/admin/forgot_password", response_class=HTMLResponse)
 def forgot_password_submit(request: Request):
-    smtp_configured = bool(SMTP_USERNAME) and bool(SMTP_PASSWORD)
+    smtp_configured = (
+        bool(SMTP_SERVER)
+        and bool(SMTP_USERNAME)
+        and bool(SMTP_PASSWORD)
+        and bool(ADMIN_EMAIL)
+    )
     reset_ttl_minutes = RESET_TOKEN_TTL_SECONDS // 60
 
     if not SECRET_KEY:
