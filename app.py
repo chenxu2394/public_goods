@@ -338,10 +338,13 @@ def init_db():
 # ---------------- Admin auth (signed cookie token) ----------------
 
 def _must_configure_admin() -> None:
-    if not ADMIN_PASSWORD:
-        raise HTTPException(500, "Server missing ADMIN_PASSWORD configuration.")
     if not SECRET_KEY:
         raise HTTPException(500, "Server missing SECRET_KEY configuration.")
+    # Accept either the env ADMIN_PASSWORD or a DB-stored hash (set via password reset).
+    # This ensures admin login works after the forgot-password flow even when the
+    # ADMIN_PASSWORD env var was never set.
+    if not ADMIN_PASSWORD and get_setting("admin_password_hash") is None:
+        raise HTTPException(500, "Server missing ADMIN_PASSWORD configuration.")
 
 
 def _b64url(data: bytes) -> str:
@@ -428,6 +431,34 @@ def _update_password_epoch() -> None:
     set_setting("password_changed_at", str(now))
     _password_epoch_cache = now
     _password_epoch_cache_ts = time.monotonic()
+
+
+def _commit_password_change(new_hash: str, *, invalidate_token: bool = False) -> None:
+    """Atomically update the admin password hash and password_changed_at epoch.
+
+    Performs all writes in a single DB transaction so that a crash between writes
+    cannot leave the hash and epoch in inconsistent states.
+
+    If *invalidate_token* is True, the ``password_reset_token`` setting is also
+    deleted in the same transaction, preventing replay of a used reset link.
+    """
+    global _password_epoch_cache, _password_epoch_cache_ts
+    now = int(dt.datetime.now().timestamp())
+    upsert_sql = (
+        "INSERT INTO settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+    )
+    conn = db()
+    try:
+        conn.execute(upsert_sql, ("admin_password_hash", new_hash))
+        conn.execute(upsert_sql, ("password_changed_at", str(now)))
+        if invalidate_token:
+            conn.execute("DELETE FROM settings WHERE key = 'password_reset_token'")
+        conn.commit()
+        _password_epoch_cache = now
+        _password_epoch_cache_ts = time.monotonic()
+    finally:
+        conn.close()
 
 
 def _hash_password(password: str) -> str:
@@ -1273,7 +1304,13 @@ def forgot_password_submit(request: Request):
     token = secrets.token_urlsafe(32)
     sent = send_reset_email(token)
     if sent:
-        _store_reset_token_and_record_send(token)  # atomic: token hash + send timestamp
+        try:
+            _store_reset_token_and_record_send(token)  # atomic: token hash + send timestamp
+        except Exception:
+            # DB write failed after a successful email send — treat as not sent so the
+            # UI does not report success and the emailed link (which would not validate)
+            # is not acted upon.
+            sent = False
     return templates.TemplateResponse(
         "forgot_password.html",
         {
@@ -1339,9 +1376,7 @@ def reset_password_submit(
             {"request": request, "valid": True, "token": token, "error": "Passwords do not match.", "reset_ttl_minutes": reset_ttl_minutes},
             status_code=400,
         )
-    set_setting("admin_password_hash", _hash_password(new_password))
-    _update_password_epoch()
-    invalidate_reset_token()
+    _commit_password_change(_hash_password(new_password), invalidate_token=True)
     resp = RedirectResponse(url="/admin/login?pw_changed=1", status_code=303)
     resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
     return resp
@@ -1372,8 +1407,7 @@ def admin_change_password(
         return _render_error("New password must not be empty.")
     if new_password != confirm_password:
         return _render_error("New passwords do not match.")
-    set_setting("admin_password_hash", _hash_password(new_password))
-    _update_password_epoch()
+    _commit_password_change(_hash_password(new_password))
     resp = RedirectResponse(url="/admin/login?pw_changed=1", status_code=303)
     resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
     return resp
