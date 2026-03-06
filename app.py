@@ -433,15 +433,6 @@ def verify_admin_token(token: str) -> bool:
         return False
 
 
-def _update_password_epoch() -> None:
-    """Record the current timestamp (ms) as the password-changed epoch for session revocation."""
-    global _password_epoch_cache, _password_epoch_cache_ts
-    now = int(dt.datetime.now().timestamp() * 1000)
-    set_setting("password_changed_at", str(now))
-    _password_epoch_cache = now
-    _password_epoch_cache_ts = time.monotonic()
-
-
 def _commit_password_change(new_hash: str, *, invalidate_token: bool = False) -> None:
     """Atomically update the admin password hash and password_changed_at epoch (in ms).
 
