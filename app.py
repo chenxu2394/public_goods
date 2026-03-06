@@ -480,9 +480,51 @@ def _hmac_token(token: str) -> str:
     return hmac.new(SECRET_KEY.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def record_reset_attempt() -> None:
-    """Record the current time as the last reset attempt (for DoS rate-limiting, regardless of success)."""
-    set_setting("password_reset_last_attempt", str(int(dt.datetime.now().timestamp())))
+def claim_reset_attempt() -> int:
+    """Atomically check the per-attempt DoS cooldown and claim a new attempt slot.
+
+    Uses BEGIN IMMEDIATE to acquire an exclusive write lock before the read-modify-write,
+    preventing concurrent requests from both passing the cooldown window.
+
+    Returns seconds remaining in the cooldown (0 if the attempt slot was successfully
+    claimed; >0 if still cooling down — the caller should back off).
+    """
+    now = int(dt.datetime.now().timestamp())
+    conn = db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'password_reset_last_attempt'"
+        ).fetchone()
+        if row is not None:
+            try:
+                last_attempt = int(row["value"].strip())
+                remaining = max(0, (last_attempt + RESET_ATTEMPT_COOLDOWN_SECONDS) - now)
+            except ValueError:
+                remaining = 0
+        else:
+            remaining = 0
+
+        if remaining > 0:
+            conn.rollback()
+            return remaining
+
+        # Claim the slot by writing the current timestamp.
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES('password_reset_last_attempt', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (str(now),),
+        )
+        conn.commit()
+        return 0
+    except sqlite3.Error:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+        raise
+    finally:
+        conn.close()
 
 
 def _store_reset_token_and_record_send(token: str) -> None:
@@ -1188,6 +1230,19 @@ def forgot_password_submit(request: Request):
     if not SECRET_KEY:
         return _forgot_password_secret_key_error(request)
 
+    # Short-circuit early when SMTP is not configured: skip cooldown recording and token
+    # generation entirely so misconfigured servers never show "Too many requests".
+    if not smtp_configured:
+        return templates.TemplateResponse(
+            "forgot_password.html",
+            {
+                "request": request,
+                "sent": False,
+                "smtp_configured": False,
+                "reset_ttl_minutes": reset_ttl_minutes,
+            },
+        )
+
     # Check send cooldown first: only set after a successful email send.
     send_remaining = get_reset_cooldown_remaining()
     if send_remaining > 0:
@@ -1201,8 +1256,9 @@ def forgot_password_submit(request: Request):
             },
         )
 
-    # Check attempt cooldown: DoS guard, set before each SMTP attempt regardless of success.
-    attempt_remaining = get_attempt_cooldown_remaining()
+    # Atomic attempt cooldown check-and-set: uses BEGIN IMMEDIATE so concurrent requests
+    # cannot both pass the cooldown window before either writes its timestamp.
+    attempt_remaining = claim_reset_attempt()
     if attempt_remaining > 0:
         return templates.TemplateResponse(
             "forgot_password.html",
@@ -1215,11 +1271,6 @@ def forgot_password_submit(request: Request):
         )
 
     token = secrets.token_urlsafe(32)
-    # record_reset_attempt() is intentionally placed here (after both cooldown checks but before
-    # send_reset_email).  Blocked requests return early before reaching this point, so the
-    # cooldown timestamp is only set once per genuine attempt.  Refreshing it on blocked requests
-    # would create a self-renewing window that never expires under sustained traffic.
-    record_reset_attempt()
     sent = send_reset_email(token)
     if sent:
         _store_reset_token_and_record_send(token)  # atomic: token hash + send timestamp
