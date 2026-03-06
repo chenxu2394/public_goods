@@ -18,6 +18,7 @@ from typing import List, Dict, Tuple, Optional
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+import segno
 
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -175,6 +176,14 @@ def round_context(sess: sqlite3.Row) -> Dict[str, object]:
         "stage": stage,
         "close_label": close_label,
     }
+
+
+def qr_svg_data_uri(content: str) -> str:
+    qr = segno.make_qr(content, error="m")
+    output = io.BytesIO()
+    qr.save(output, kind="svg", scale=6, border=2, dark="#111111", light="#ffffff")
+    svg = output.getvalue()
+    return "data:image/svg+xml;base64," + base64.b64encode(svg).decode("ascii")
 
 
 def init_db():
@@ -1122,6 +1131,7 @@ def admin_panel(request: Request, session_id: str):
     counts = session_counts(session_id)
 
     join_url = f"{PUBLIC_BASE_URL}/join/{session_id}"
+    join_qr_data_uri = qr_svg_data_uri(join_url)
     export_url = f"{PUBLIC_BASE_URL}/admin/{session_id}/export"
     template_url = f"{PUBLIC_BASE_URL}/admin/{session_id}/whitelist/template"
     display_url = f"{PUBLIC_BASE_URL}/display/{session_id}"
@@ -1137,6 +1147,7 @@ def admin_panel(request: Request, session_id: str):
             "students": students,
             "counts": counts,
             "join_url": join_url,
+            "join_qr_data_uri": join_qr_data_uri,
             "export_url": export_url,
             "template_url": template_url,
             "display_url": display_url,

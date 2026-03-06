@@ -12,6 +12,14 @@
 <div class="card">
   <div><b>Student join link:</b> <span class="mono">{{ join_url }}</span></div>
   <div class="muted">Share this link with students.</div>
+  <div style="margin-top:12px;">
+    <img
+      src="{{ join_qr_data_uri }}"
+      alt="QR code for the student join link"
+      style="display:block; width:min(220px, 100%); height:auto; padding:10px; border:1px solid #e5e5e5; border-radius:12px; background:#fff;"
+    />
+    <div class="muted" style="margin-top:8px;">Students can scan this QR code to open the join page on their phones.</div>
+  </div>
   <div style="margin-top:8px;"><b>Classroom display:</b> <a href="{{ display_url }}" target="_blank">Open projection page</a></div>
   <div style="margin-top:8px;"><b>Export data:</b> <a href="{{ export_url }}">Download CSV (long format by round)</a></div>
 </div>

@@ -8,6 +8,7 @@ dependencies = [
   "fastapi==0.115.0",
   "jinja2==3.1.4",
   "python-multipart==0.0.9",
+  "segno>=1.6.6",
   "uvicorn==0.30.6",
 ]
 
