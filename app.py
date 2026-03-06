@@ -396,15 +396,22 @@ def verify_admin_token(token: str) -> bool:
         cache_age = time.monotonic() - _password_epoch_cache_ts
         if _password_epoch_cache is None or cache_age >= _PASSWORD_EPOCH_CACHE_TTL_SECONDS:
             epoch_data = get_setting("password_changed_at")
-            if epoch_data:
+            # If the setting could not be loaded (e.g. DB error masked as None), fail closed
+            # and avoid updating the cache timestamp so we will retry soon.
+            if epoch_data is None:
+                return False
+            epoch_str = epoch_data.strip()
+            if not epoch_str:
+                # No password change recorded yet; treat as "no revocation epoch"
+                _password_epoch_cache = 0
+                _password_epoch_cache_ts = time.monotonic()
+            else:
                 try:
-                    _password_epoch_cache = int(epoch_data.strip())
+                    _password_epoch_cache = int(epoch_str)
                 except ValueError:
                     # Malformed epoch data — fail closed to avoid keeping old sessions alive
                     return False
-            else:
-                _password_epoch_cache = None
-            _password_epoch_cache_ts = time.monotonic()
+                _password_epoch_cache_ts = time.monotonic()
         if _password_epoch_cache is not None and ts < _password_epoch_cache:
             return False
         return True
