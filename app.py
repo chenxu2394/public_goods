@@ -445,7 +445,7 @@ def _hmac_token(token: str) -> str:
 
 
 def record_reset_attempt() -> None:
-    """Record the current time as the last reset attempt, to enforce cooldown even on failure."""
+    """Record the current time as the last successful reset email send, to enforce cooldown between sends."""
     set_setting("password_reset_last_sent", str(int(dt.datetime.now().timestamp())))
 
 
@@ -1088,8 +1088,23 @@ def admin_logout():
     return resp
 
 
+def _forgot_password_secret_key_error(request: Request):
+    """Return a 503 template response when SECRET_KEY is not configured."""
+    return templates.TemplateResponse(
+        "forgot_password.html",
+        {
+            "request": request,
+            "secret_key_missing": True,
+            "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60,
+        },
+        status_code=503,
+    )
+
+
 @app.get("/admin/forgot_password", response_class=HTMLResponse)
 def forgot_password_page(request: Request):
+    if not SECRET_KEY:
+        return _forgot_password_secret_key_error(request)
     return templates.TemplateResponse(
         "forgot_password.html",
         {"request": request, "reset_ttl_minutes": RESET_TOKEN_TTL_SECONDS // 60},
@@ -1102,16 +1117,7 @@ def forgot_password_submit(request: Request):
     reset_ttl_minutes = RESET_TOKEN_TTL_SECONDS // 60
 
     if not SECRET_KEY:
-        return templates.TemplateResponse(
-            "forgot_password.html",
-            {
-                "request": request,
-                "sent": False,
-                "smtp_configured": False,
-                "secret_key_missing": True,
-                "reset_ttl_minutes": reset_ttl_minutes,
-            },
-        )
+        return _forgot_password_secret_key_error(request)
 
     cooldown_remaining = get_reset_cooldown_remaining()
     if cooldown_remaining > 0:
