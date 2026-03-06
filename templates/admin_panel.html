@@ -36,7 +36,7 @@
       </form>
     </div>
 
-    <div class="col" style="text-align:right;">
+    <div class="col mobile-left" style="text-align:right;">
       <form method="post" action="/admin/{{ sess.id }}/whitelist/clear" style="display:inline;">
         <button type="submit">Clear whitelist</button>
       </form>
@@ -59,7 +59,7 @@
         {% endif %}
       </div>
     </div>
-    <div class="col" style="text-align:right;">
+    <div class="col mobile-left" style="text-align:right;">
       {% if sess.locked == 0 %}
       <form method="post" action="/admin/{{ sess.id }}/lock" style="display:inline;">
         <button type="submit">Randomize groups and lock</button>

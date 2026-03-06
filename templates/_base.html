@@ -9,7 +9,8 @@
     .card{border:1px solid #ddd; border-radius:12px; padding:16px; margin:12px 0;}
     .row{display:flex; gap:12px; flex-wrap:wrap;}
     .col{flex:1; min-width:260px;}
-    input, button{font-size:16px; padding:10px 12px; border-radius:10px; border:1px solid #ccc;}
+    input, button{font-size:16px; padding:10px 12px; border-radius:10px; border:1px solid #ccc; box-sizing:border-box; max-width:100%;}
+    input[type="file"]{display:block; width:100%;}
     button{cursor:pointer;}
     .muted{color:#666;}
     .pill{display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid #ccc; font-size:13px;}
@@ -24,6 +25,14 @@
     .table-scroll th{position:sticky; top:0; z-index:1;}
     a{color:#06c; text-decoration:none;}
     a:hover{text-decoration:underline;}
+    a, .mono{overflow-wrap:anywhere; word-break:break-word;}
+    @media (max-width:640px){
+      body{margin:12px;}
+      .card{padding:14px;}
+      .row{gap:10px;}
+      .col{min-width:100%;}
+      .mobile-left{text-align:left !important;}
+    }
   </style>
 </head>
 <body>
