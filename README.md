@@ -79,6 +79,51 @@ Azure Web App settings for private GHCR image pull:
 - `DOCKER_REGISTRY_SERVER_PASSWORD=<github-pat-with-read:packages>`
 - `WEBSITES_ENABLE_APP_SERVICE_STORAGE=true` (recommended if using SQLite at `/home/public_goods.db`)
 
+## Azure backup setup for SQLite
+
+This app is designed to keep SQLite on `/home/public_goods.db`, which is the persistent App Service filesystem:
+
+- `app.py`
+- `scripts/setup_azure_webapp.sh`
+
+If your Azure app setting `PUBLIC_GOODS_DB_PATH` points somewhere under `/app` or another non-`/home` path, fix that first before relying on backups.
+
+Use the helper script to create Blob Storage and configure scheduled App Service backups:
+
+```bash
+./scripts/setup_azure_backups.sh
+```
+
+What the script does:
+
+- validates that the Web App is on `B1` or higher
+- creates or reuses a Storage Account and private Blob container
+- generates a SAS URL for that container
+- configures scheduled Azure App Service custom backups
+- optionally runs an immediate backup
+
+Verify backup status:
+
+```bash
+./scripts/show_azure_backups.sh <resource-group> <webapp-name> [subscription-id]
+```
+
+Download one backup ZIP and extract the SQLite file:
+
+```bash
+./scripts/download_azure_backup.sh [storage-resource-group] [storage-account] [container-name] [subscription-id]
+```
+
+If you omit arguments, the script prompts for them, lists the available backup ZIPs in the container, lets you choose one, downloads it, extracts it, finds `public_goods.db` automatically, and also copies the chosen database to a flat file path for easy inspection with `sqlite3`.
+
+Important notes:
+
+- App Service custom backups are not supported on `F1` / `D1`
+- keep `PUBLIC_GOODS_DB_PATH` under `/home`
+- keep the App Service plan single-instance when using SQLite
+- rotate the SAS before it expires, or scheduled backups will stop
+- restore to a slot or a new app first to avoid production downtime
+
 ## How to use
 
 1. Visit `/admin` (redirects to `/admin/login`)
