@@ -175,10 +175,10 @@ function renderActionTargets(data){
   wrap.style.display = "block";
   if(data.session.phase === "reward"){
     title.innerText = "Reward Stage / 奖励阶段";
-    desc.innerText = "Each reward point costs you 1 and gives the target +2 income. / 每给予1点奖励，你支付1点，被奖励者增加2点收益。";
+    desc.innerText = "Each reward point costs you 1 and gives the target +2 income. You can update your choices until the teacher closes this stage. / 每给予1点奖励，你支付1点，被奖励者增加2点收益。在教师关闭本阶段前，你都可以修改并重新提交。";
   }else{
     title.innerText = "Punishment Stage / 惩罚阶段";
-    desc.innerText = "Each punishment point costs you 1 and reduces the target by 3. / 每给予1点惩罚，你支付1点，被惩罚者减少3点收益。";
+    desc.innerText = "Each punishment point costs you 1 and reduces the target by 3. You can update your choices until the teacher closes this stage. / 每给予1点惩罚，你支付1点，被惩罚者减少3点收益。在教师关闭本阶段前，你都可以修改并重新提交。";
   }
 
   data.action_targets.forEach(t => {

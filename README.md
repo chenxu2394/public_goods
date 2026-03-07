@@ -135,6 +135,6 @@ Important notes:
    - Open current round (contribution stage)
    - Students submit contribution (`0-10`)
    - Baseline round: close and compute directly
-   - Reward/Punishment round: close once to open action stage, close again to compute
+   - Reward/Punishment round: open action stage, let students submit/update actions, then compute when ready
 7. Use `/display/<session_id>` for classroom projection
 8. Export CSV from admin panel (long format: one row per student per round)

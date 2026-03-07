@@ -1216,6 +1216,8 @@ def admin_open_round(request: Request, session_id: str, round_no: Optional[int] 
     sess = get_session(session_id)
     if int(sess["locked"]) != 1:
         raise HTTPException(400, "Please lock groups before opening rounds.")
+    if stage_of_session(sess) != "closed":
+        raise HTTPException(400, "Current round is already open.")
 
     if round_no is None:
         round_no = int(sess["current_round"])
@@ -1225,6 +1227,31 @@ def admin_open_round(request: Request, session_id: str, round_no: Optional[int] 
         raise HTTPException(400, "invalid round")
 
     open_round(session_id, round_no)
+    return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
+
+
+@app.post("/admin/{session_id}/open_action_stage")
+def admin_open_action_stage(request: Request, session_id: str):
+    gate = _admin_gate(request)
+    if gate:
+        return gate
+
+    sess = get_session(session_id)
+    if int(sess["locked"]) != 1:
+        raise HTTPException(400, "Please lock groups before opening rounds.")
+
+    stage = stage_of_session(sess)
+    round_no = int(sess["current_round"])
+    phase, _ = phase_for_round(round_no)
+
+    if phase not in ("reward", "punishment"):
+        raise HTTPException(400, "Baseline rounds do not have an action stage.")
+    if stage == "closed":
+        raise HTTPException(400, "Open the contribution stage first.")
+    if stage == "action":
+        raise HTTPException(400, f"{phase_label(phase)} stage is already open.")
+
+    open_action_stage(session_id)
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
 
 
@@ -1243,9 +1270,8 @@ def admin_close_and_compute(request: Request, session_id: str):
     if stage == "closed":
         raise HTTPException(400, "Round is already closed. Open it first.")
 
-    if stage == "contribution" and phase in ("reward", "punishment"):
-        open_action_stage(session_id)
-        return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
+    if phase in ("reward", "punishment") and stage != "action":
+        raise HTTPException(400, f"Open the {phase_label(phase)} stage before computing this round.")
 
     # baseline contribution close, or reward/punishment action close
     close_round(session_id)

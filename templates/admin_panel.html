@@ -96,17 +96,37 @@
 
   <div class="row" style="margin-top:10px;">
     <div class="col">
-      <form method="post" action="/admin/{{ sess.id }}/open_round">
-        <input type="hidden" name="round_no" value="{{ round_ctx.round }}" />
-        <button type="submit">Open current round</button>
-      </form>
-      <div class="muted" style="margin-top:6px;">Open contribution stage for the current round.</div>
+      {% if round_ctx.stage == "closed" %}
+        <form method="post" action="/admin/{{ sess.id }}/open_round">
+          <input type="hidden" name="round_no" value="{{ round_ctx.round }}" />
+          <button type="submit">Open current round</button>
+        </form>
+        <div class="muted" style="margin-top:6px;">Open contribution stage for the current round.</div>
+      {% else %}
+        <button type="button" disabled>Open current round</button>
+        <div class="muted" style="margin-top:6px;">Unavailable while a stage is already open.</div>
+      {% endif %}
     </div>
     <div class="col">
-      <form method="post" action="/admin/{{ sess.id }}/close_and_compute">
-        <button type="submit">{{ round_ctx.close_label }}</button>
-      </form>
-      <div class="muted" style="margin-top:6px;">For reward/punishment rounds, click once to open action stage and again to compute.</div>
+      {% if round_ctx.phase == "baseline" and round_ctx.stage == "contribution" %}
+        <form method="post" action="/admin/{{ sess.id }}/close_and_compute">
+          <button type="submit">Close contribution and compute round</button>
+        </form>
+        <div class="muted" style="margin-top:6px;">Baseline rounds compute immediately after contribution closes.</div>
+      {% elif round_ctx.phase != "baseline" and round_ctx.stage == "contribution" %}
+        <form method="post" action="/admin/{{ sess.id }}/open_action_stage">
+          <button type="submit">Open {{ round_ctx.phase_label }} stage</button>
+        </form>
+        <div class="muted" style="margin-top:6px;">This keeps the {{ round_ctx.phase_label|lower }} stage open until you click compute.</div>
+      {% elif round_ctx.phase != "baseline" and round_ctx.stage == "action" %}
+        <form method="post" action="/admin/{{ sess.id }}/close_and_compute">
+          <button type="submit">Close {{ round_ctx.phase_label }} stage and compute round</button>
+        </form>
+        <div class="muted" style="margin-top:6px;">Compute only when all students have finished their action choices.</div>
+      {% else %}
+        <button type="button" disabled>Compute round</button>
+        <div class="muted" style="margin-top:6px;">Open the current round first.</div>
+      {% endif %}
     </div>
   </div>
 
