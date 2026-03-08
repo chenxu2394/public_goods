@@ -1,0 +1,37 @@
+{% extends "_base.html" %}
+{% set heading = "Share Link" %}
+{% set subheading = sess.title %}
+{% block content %}
+<div class="card" style="max-width:960px; margin:24px auto; text-align:center;">
+  <div class="muted" style="margin-bottom:16px;">Project this page so students can scan the QR code or type the join link.</div>
+  <div style="display:flex; justify-content:center;">
+    <img
+      id="share-qr"
+      src="{{ join_qr_data_uri }}"
+      alt="QR code for the student join link"
+      style="display:block; width:min(480px, 80vw); height:auto; padding:20px; border:1px solid #e5e5e5; border-radius:20px; background:#fff;"
+    />
+  </div>
+  <div style="margin-top:24px;">
+    <div class="muted" style="margin-bottom:8px;">Student join link</div>
+    <div id="share-link" class="mono" style="font-size:20px; line-height:1.6;">{{ join_url }}</div>
+  </div>
+</div>
+
+<script>
+const shareApiUrl = "{{ share_api_url }}";
+
+async function fetchShareLink(){
+  const res = await fetch(shareApiUrl, { credentials: "same-origin" });
+  if(!res.ok) return;
+  const data = await res.json();
+
+  document.title = `Share Link - ${data.session.title}`;
+  document.getElementById("share-qr").src = data.join_qr_data_uri;
+  document.getElementById("share-link").innerText = data.join_url;
+}
+
+fetchShareLink();
+setInterval(fetchShareLink, 2000);
+</script>
+{% endblock %}

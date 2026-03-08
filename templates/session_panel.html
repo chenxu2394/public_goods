@@ -109,14 +109,23 @@
     />
     <div class="muted" style="margin-top:8px;">Students can scan this QR code to open the join page on their phones.</div>
   </div>
-  <form method="post" action="/admin/{{ sess.id }}/rotate_join_link" style="margin-top:12px;">
-    <button
-      type="submit"
-      onclick="return confirm('Refresh the student join link and QR code? The previous join link will stop working immediately for new joins.');"
-    >
-      Refresh Join Link
-    </button>
-  </form>
+  <div class="row" style="margin-top:12px; align-items:flex-end;">
+    <div class="col" style="flex:0 0 auto; min-width:0;">
+      <form method="post" action="/admin/{{ sess.id }}/rotate_join_link">
+        <button
+          type="submit"
+          onclick="return confirm('Refresh the student join link and QR code? The previous join link will stop working immediately for new joins.');"
+        >
+          Refresh Join Link
+        </button>
+      </form>
+    </div>
+    <div class="col" style="flex:0 0 auto; min-width:0;">
+      <a href="{{ share_url }}" target="_blank" rel="noopener noreferrer">
+        <button type="button">Share Join Link</button>
+      </a>
+    </div>
+  </div>
   <div class="muted" style="margin-top:8px;">Use this when you need a new student join link without changing the session itself.</div>
   <div style="margin-top:8px;"><b>Classroom display:</b> <a href="{{ display_url }}" target="_blank">Open projection page</a></div>
   <div style="margin-top:8px;"><b>Export data:</b> <a href="{{ export_url }}">Download CSV (long format by round)</a></div>

@@ -1125,6 +1125,126 @@ def test_teacher_cannot_rotate_other_users_join_link(monkeypatch, tmp_path: Path
         assert app_module.get_session(session_id)["join_token"] == old_join_token
 
 
+def test_session_panel_includes_share_link_button(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        session_id = _create_session(client, "Share Link Session")
+
+        panel = client.get(f"/admin/{session_id}")
+        assert panel.status_code == 200
+        assert f'href="http://testserver/admin/{session_id}/share"' in panel.text
+        assert 'target="_blank"' in panel.text
+        assert "Share Link" in panel.text
+
+
+def test_teacher_and_admin_can_access_share_link_page_and_api(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher_temp = _create_teacher(client, "Teacher1")
+        teacher = app_module.get_user_by_username("Teacher1")
+        assert teacher is not None
+
+        assert _login(client, "Teacher1", teacher_temp).status_code == 303
+        assert _change_password(client, teacher_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+        session_id = _create_session(client, "Teacher Share Page")
+
+        teacher_share_page = client.get(f"/admin/{session_id}/share")
+        assert teacher_share_page.status_code == 200
+        assert "Student join link" in teacher_share_page.text
+
+        teacher_share_api = client.get(f"/api/admin/{session_id}/share_link")
+        assert teacher_share_api.status_code == 200
+        teacher_payload = teacher_share_api.json()
+        assert teacher_payload["session"]["title"] == "Teacher Share Page"
+        assert teacher_payload["join_url"].endswith(app_module.get_session(session_id)["join_token"])
+        assert teacher_payload["join_qr_data_uri"].startswith("data:image/svg+xml;base64,")
+
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        admin_share_page = client.get(f"/admin/{session_id}/share")
+        assert admin_share_page.status_code == 200
+
+        admin_share_api = client.get(f"/api/admin/{session_id}/share_link")
+        assert admin_share_api.status_code == 200
+        assert admin_share_api.json()["join_url"] == teacher_payload["join_url"]
+
+
+def test_share_link_api_updates_after_join_link_rotation(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher_temp = _create_teacher(client, "Teacher1")
+
+        assert _login(client, "Teacher1", teacher_temp).status_code == 303
+        assert _change_password(client, teacher_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+        session_id = _create_session(client, "Live Share Link")
+
+        before = client.get(f"/api/admin/{session_id}/share_link")
+        assert before.status_code == 200
+        before_payload = before.json()
+
+        rotate = client.post(f"/admin/{session_id}/rotate_join_link", follow_redirects=False)
+        assert rotate.status_code == 200
+
+        after = client.get(f"/api/admin/{session_id}/share_link")
+        assert after.status_code == 200
+        after_payload = after.json()
+
+        assert after_payload["session"]["title"] == "Live Share Link"
+        assert after_payload["join_url"] != before_payload["join_url"]
+        assert after_payload["join_qr_data_uri"] != before_payload["join_qr_data_uri"]
+
+
+def test_teacher_cannot_access_other_users_share_link_page_or_api(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher1_temp = _create_teacher(client, "Teacher1")
+        teacher2_temp = _create_teacher(client, "Teacher2")
+
+        assert _login(client, "Teacher1", teacher1_temp).status_code == 303
+        assert _change_password(client, teacher1_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+        session_id = _create_session(client, "Teacher1 Share Link")
+
+        assert _login(client, "Teacher2", teacher2_temp).status_code == 303
+        assert _change_password(client, teacher2_temp, "Teacher2-final-pass").status_code == 303
+        assert _login(client, "Teacher2", "Teacher2-final-pass").status_code == 303
+
+        share_page = client.get(f"/admin/{session_id}/share", follow_redirects=False)
+        assert share_page.status_code == 404
+
+        share_api = client.get(f"/api/admin/{session_id}/share_link", follow_redirects=False)
+        assert share_api.status_code == 404
+
+
 def test_teacher_can_rename_own_session(monkeypatch, tmp_path: Path):
     app_module, _ = _load_app(
         monkeypatch,

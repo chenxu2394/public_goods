@@ -1802,6 +1802,14 @@ def _get_teacher_or_404(user_id: str) -> sqlite3.Row:
     return user
 
 
+def _share_link_context(sess: sqlite3.Row) -> Dict[str, str]:
+    join_url = f"{PUBLIC_BASE_URL}/join/{sess['join_token']}"
+    return {
+        "join_url": join_url,
+        "join_qr_data_uri": qr_svg_data_uri(join_url),
+    }
+
+
 def _render_session_panel(
     request: Request,
     user: sqlite3.Row,
@@ -1813,11 +1821,11 @@ def _render_session_panel(
     students = list_students(str(sess["id"]))
     counts = session_counts(str(sess["id"]))
 
-    join_url = f"{PUBLIC_BASE_URL}/join/{sess['join_token']}"
-    join_qr_data_uri = qr_svg_data_uri(join_url)
+    share_ctx = _share_link_context(sess)
     export_url = f"{PUBLIC_BASE_URL}/admin/{sess['id']}/export"
     template_url = f"{PUBLIC_BASE_URL}/admin/{sess['id']}/whitelist/template"
     display_url = f"{PUBLIC_BASE_URL}/display/{sess['id']}"
+    share_url = f"{PUBLIC_BASE_URL}/admin/{sess['id']}/share"
 
     context: Dict[str, object] = {
         "request": request,
@@ -1826,8 +1834,9 @@ def _render_session_panel(
         "sess": sess,
         "students": students,
         "counts": counts,
-        "join_url": join_url,
-        "join_qr_data_uri": join_qr_data_uri,
+        "join_url": share_ctx["join_url"],
+        "join_qr_data_uri": share_ctx["join_qr_data_uri"],
+        "share_url": share_url,
         "export_url": export_url,
         "template_url": template_url,
         "display_url": display_url,
@@ -1837,6 +1846,16 @@ def _render_session_panel(
     }
     context.update(extra)
     return templates.TemplateResponse("session_panel.html", context, status_code=status_code)
+
+
+def _render_share_link_page(request: Request, sess: sqlite3.Row):
+    context: Dict[str, object] = {
+        "request": request,
+        "sess": sess,
+        "share_api_url": f"{PUBLIC_BASE_URL}/api/admin/{sess['id']}/share_link",
+    }
+    context.update(_share_link_context(sess))
+    return templates.TemplateResponse("share_link.html", context)
 
 
 @app.get("/admin/login", response_class=HTMLResponse)
@@ -2062,6 +2081,16 @@ def admin_panel(request: Request, session_id: str):
 
     sess = get_session_for_user(session_id, user)
     return _render_session_panel(request, user, sess)
+
+
+@app.get("/admin/{session_id}/share", response_class=HTMLResponse)
+def admin_share_link_page(request: Request, session_id: str):
+    user, gate = _management_gate(request)
+    if gate:
+        return gate
+
+    sess = get_session_for_user(session_id, user)
+    return _render_share_link_page(request, sess)
 
 
 @app.post("/admin/{session_id}/title")
@@ -2869,5 +2898,25 @@ def api_display_status(session_id: str):
             "latest_groups": latest_groups,
             "avg_series": series,
             "overall_avg_contrib": float(overall) if overall is not None else None,
+        }
+    )
+
+
+@app.get("/api/admin/{session_id}/share_link")
+def api_share_link_status(request: Request, session_id: str):
+    user, gate = _management_gate(request)
+    if gate:
+        return gate
+
+    sess = get_session_for_user(session_id, user)
+    payload = _share_link_context(sess)
+    return JSONResponse(
+        {
+            "session": {
+                "id": sess["id"],
+                "title": sess["title"],
+            },
+            "join_url": payload["join_url"],
+            "join_qr_data_uri": payload["join_qr_data_uri"],
         }
     )
