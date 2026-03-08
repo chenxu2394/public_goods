@@ -264,7 +264,7 @@
           <td class="mono">{{ st.student_id }}</td>
           <td>{{ st.name }}</td>
           <td>{% if st.group_no %}{{ st.group_no }}{% else %}<span class="muted">Not assigned</span>{% endif %}</td>
-          <td><a href="/s/{{ sess.id }}/{{ st.student_id }}">Open</a></td>
+          <td><a href="/s/{{ sess.id }}/{{ st.student_id }}" target="_blank" rel="noopener noreferrer">Open</a></td>
         </tr>
       {% endfor %}
     </table>
