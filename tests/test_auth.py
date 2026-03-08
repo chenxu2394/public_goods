@@ -380,3 +380,124 @@ def test_admin_can_transfer_session_to_teacher(monkeypatch, tmp_path: Path):
 
         forbidden = client.get(f"/admin/{session_id}", follow_redirects=False)
         assert forbidden.status_code == 404
+
+
+def test_teacher_delete_archives_session_to_admin(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher_temp = _create_teacher(client, "Teacher1")
+        teacher = app_module.get_user_by_username("Teacher1")
+        admin = app_module.get_user_by_username("admin")
+        assert teacher is not None
+        assert admin is not None
+
+        response = _login(client, "Teacher1", teacher_temp)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/admin?pw_change_required=1"
+        assert _change_password(client, teacher_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+
+        session_id = _create_session(client, "Teacher Archive Session")
+
+        response = client.post(f"/admin/{session_id}/delete", follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/admin"
+
+        home = client.get("/admin")
+        assert "Teacher Archive Session" not in home.text
+
+        forbidden = client.get(f"/admin/{session_id}", follow_redirects=False)
+        assert forbidden.status_code == 404
+
+        session_row = app_module.get_session(session_id)
+        assert session_row["owner_user_id"] == admin["id"]
+        assert session_row["teacher_removed_by_user_id"] == teacher["id"]
+        assert session_row["teacher_removed_by_username"] == "Teacher1"
+        assert session_row["teacher_removed_at"] is not None
+
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        admin_home = client.get("/admin")
+        assert admin_home.status_code == 200
+        assert "Teacher Archive Session" in admin_home.text
+        assert "Removed by Teacher1" in admin_home.text
+
+        admin_panel = client.get(f"/admin/{session_id}")
+        assert admin_panel.status_code == 200
+        assert "Removed by Teacher1" in admin_panel.text
+
+
+def test_admin_delete_still_hard_deletes_session(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        session_id = _create_session(client, "Admin Delete Session")
+
+        response = client.post(f"/admin/{session_id}/delete", follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/admin"
+
+        missing = client.get(f"/admin/{session_id}", follow_redirects=False)
+        assert missing.status_code == 404
+
+        conn = sqlite3.connect(app_module.DB_PATH)
+        row = conn.execute("SELECT 1 FROM sessions WHERE id=?", (session_id,)).fetchone()
+        conn.close()
+        assert row is None
+
+
+def test_transfer_clears_teacher_archive_metadata(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher1_temp = _create_teacher(client, "Teacher1")
+        teacher2_temp = _create_teacher(client, "Teacher2")
+        teacher1 = app_module.get_user_by_username("Teacher1")
+        teacher2 = app_module.get_user_by_username("Teacher2")
+        assert teacher1 is not None
+        assert teacher2 is not None
+
+        assert _login(client, "Teacher1", teacher1_temp).status_code == 303
+        assert _change_password(client, teacher1_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+        session_id = _create_session(client, "Recoverable Session")
+        assert client.post(f"/admin/{session_id}/delete", follow_redirects=False).status_code == 303
+
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        response = client.post(
+            f"/admin/{session_id}/transfer",
+            data={"teacher_user_id": teacher2["id"]},
+        )
+        assert response.status_code == 200
+        assert "Session transferred to" in response.text
+
+        session_row = app_module.get_session(session_id)
+        assert session_row["owner_user_id"] == teacher2["id"]
+        assert session_row["teacher_removed_at"] is None
+        assert session_row["teacher_removed_by_user_id"] is None
+        assert session_row["teacher_removed_by_username"] is None
+
+        assert _login(client, "Teacher2", teacher2_temp).status_code == 303
+        assert _change_password(client, teacher2_temp, "Teacher2-final-pass").status_code == 303
+        assert _login(client, "Teacher2", "Teacher2-final-pass").status_code == 303
+        home = client.get("/admin")
+        assert home.status_code == 200
+        assert "Recoverable Session" in home.text

@@ -12,6 +12,9 @@
 <div class="card">
   {% if is_admin %}
     <div style="margin-bottom:8px;"><b>Session owner:</b> <span class="mono">{{ sess.owner_username or "admin" }}</span></div>
+    {% if sess.teacher_removed_at %}
+      <div class="pill warn" style="margin-bottom:8px;">Removed by {{ sess.teacher_removed_by_username or "teacher" }} on {{ sess.teacher_removed_at }}</div>
+    {% endif %}
     {% if transfer_error %}<div class="pill warn" style="margin-bottom:8px;">{{ transfer_error }}</div>{% endif %}
     {% if transfer_success %}<div class="pill ok" style="margin-bottom:8px;">{{ transfer_success }}</div>{% endif %}
     <form method="post" action="/admin/{{ sess.id }}/transfer" class="row" style="margin-bottom:12px;">

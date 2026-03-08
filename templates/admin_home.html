@@ -25,8 +25,14 @@
   function openDeleteModal(form, title) {
     pendingDeleteForm = form;
     deleteModalTrigger = document.activeElement;
-    document.getElementById('delete-modal-message').textContent =
-      'Are you sure you want to delete the session "' + title + '"? This cannot be undone.';
+    var mode = form.dataset.deleteMode || 'delete';
+    var message;
+    if (mode === 'archive') {
+      message = 'Send the session "' + title + '" to the admin? It will disappear from your list but remain available to the admin.';
+    } else {
+      message = 'Are you sure you want to delete the session "' + title + '"? This cannot be undone.';
+    }
+    document.getElementById('delete-modal-message').textContent = message;
     var modal = document.getElementById('delete-modal');
     modal.style.display = 'flex';
     document.getElementById('delete-modal-cancel').focus();
@@ -223,6 +229,9 @@
               {% if s.locked == 1 %}<span class="pill ok">Groups locked</span>{% else %}<span class="pill warn">Unlocked</span>{% endif %}
               {% if s.round_open == 1 %}<span class="pill ok">Contribution open</span>{% elif s.action_open == 1 %}<span class="pill warn">Action open</span>{% else %}<span class="pill muted">Round closed</span>{% endif %}
               <span class="pill">Current round {{ s.current_round }}</span>
+              {% if is_admin and s.teacher_removed_at %}
+                <span class="pill warn">Removed by {{ s.teacher_removed_by_username or "teacher" }} on {{ s.teacher_removed_at }}</span>
+              {% endif %}
             </td>
             <td>
               {% if must_change_password %}
@@ -235,8 +244,10 @@
               {% if must_change_password %}
                 <span class="muted">Unavailable</span>
               {% else %}
-                <form method="post" action="/admin/{{ s.id }}/delete">
-                  <button type="button" onclick='openDeleteModal(this.form, {{ s.title|tojson }})'>Delete</button>
+                <form method="post" action="/admin/{{ s.id }}/delete" data-delete-mode="{% if is_admin %}delete{% else %}archive{% endif %}">
+                  <button type="button" onclick='openDeleteModal(this.form, {{ s.title|tojson }})'>
+                    {% if is_admin %}Delete{% else %}Remove{% endif %}
+                  </button>
                 </form>
               {% endif %}
             </td>

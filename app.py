@@ -310,6 +310,13 @@ def _backfill_session_owners(conn: sqlite3.Connection, admin_user_id: str) -> No
     )
 
 
+def _get_admin_user_conn(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM users WHERE username_norm=?",
+        (_normalize_username("admin"),),
+    ).fetchone()
+
+
 def phase_for_round(round_no: int) -> Tuple[str, int]:
     if round_no <= PHASE_ROUNDS:
         return "baseline", round_no
@@ -513,6 +520,8 @@ def init_db():
 
     _ensure_column(conn, "sessions", "action_open", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "sessions", "owner_user_id", "TEXT")
+    _ensure_column(conn, "sessions", "teacher_removed_at", "TEXT")
+    _ensure_column(conn, "sessions", "teacher_removed_by_user_id", "TEXT")
     _ensure_column(conn, "students", "anonymous_id", "TEXT")
 
     _ensure_column(conn, "results", "contrib", "INTEGER NOT NULL DEFAULT 0")
@@ -664,8 +673,35 @@ def transfer_session_owner(session_id: str, owner_user_id: str) -> None:
     conn = db()
     try:
         conn.execute(
-            "UPDATE sessions SET owner_user_id=? WHERE id=?",
+            """
+            UPDATE sessions
+            SET owner_user_id=?,
+                teacher_removed_at=NULL,
+                teacher_removed_by_user_id=NULL
+            WHERE id=?
+        """,
             (owner_user_id, session_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def archive_session_to_admin(session_id: str, removed_by_user_id: str) -> None:
+    conn = db()
+    try:
+        admin_user = _get_admin_user_conn(conn)
+        if not admin_user:
+            raise HTTPException(500, "Admin account is unavailable.")
+        conn.execute(
+            """
+            UPDATE sessions
+            SET owner_user_id=?,
+                teacher_removed_at=?,
+                teacher_removed_by_user_id=?
+            WHERE id=?
+        """,
+            (str(admin_user["id"]), now_iso(), removed_by_user_id, session_id),
         )
         conn.commit()
     finally:
@@ -788,9 +824,12 @@ def get_session(session_id: str) -> sqlite3.Row:
     conn = db()
     row = conn.execute(
         """
-        SELECT s.*, u.username AS owner_username
+        SELECT s.*,
+               owner.username AS owner_username,
+               removed_by.username AS teacher_removed_by_username
         FROM sessions s
-        LEFT JOIN users u ON u.id=s.owner_user_id
+        LEFT JOIN users owner ON owner.id=s.owner_user_id
+        LEFT JOIN users removed_by ON removed_by.id=s.teacher_removed_by_user_id
         WHERE s.id=?
     """,
         (session_id,),
@@ -814,18 +853,24 @@ def list_sessions(owner_user_id: Optional[str] = None) -> List[sqlite3.Row]:
         if owner_user_id is None:
             rows = conn.execute(
                 """
-                SELECT s.*, u.username AS owner_username
+                SELECT s.*,
+                       owner.username AS owner_username,
+                       removed_by.username AS teacher_removed_by_username
                 FROM sessions s
-                LEFT JOIN users u ON u.id=s.owner_user_id
+                LEFT JOIN users owner ON owner.id=s.owner_user_id
+                LEFT JOIN users removed_by ON removed_by.id=s.teacher_removed_by_user_id
                 ORDER BY s.created_at DESC
             """
             ).fetchall()
         else:
             rows = conn.execute(
                 """
-                SELECT s.*, u.username AS owner_username
+                SELECT s.*,
+                       owner.username AS owner_username,
+                       removed_by.username AS teacher_removed_by_username
                 FROM sessions s
-                LEFT JOIN users u ON u.id=s.owner_user_id
+                LEFT JOIN users owner ON owner.id=s.owner_user_id
+                LEFT JOIN users removed_by ON removed_by.id=s.teacher_removed_by_user_id
                 WHERE s.owner_user_id=?
                 ORDER BY s.created_at DESC
             """,
@@ -1950,7 +1995,10 @@ def admin_delete_session(request: Request, session_id: str):
         return gate
 
     _ = get_session_for_user(session_id, user)
-    delete_session(session_id)
+    if user["role"] == USER_ROLE_ADMIN:
+        delete_session(session_id)
+    else:
+        archive_session_to_admin(session_id, str(user["id"]))
     return RedirectResponse(url="/admin", status_code=303)
 
 
