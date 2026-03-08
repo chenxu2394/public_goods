@@ -1,11 +1,13 @@
-# Public Goods Experiment (Azure Web App + Whitelist + Admin Password)
+# Public Goods Experiment (Azure Web App + Multi-User Admin/Teacher Auth)
 
 ## Azure App Settings (required)
 
 Set in Azure Web App -> Configuration -> Application settings:
 
-- ADMIN_PASSWORD: your admin password
+- ADMIN_PASSWORD: bootstrap password for the initial `admin` superuser
 - SECRET_KEY: a long random string (>= 32 chars)
+
+`ADMIN_PASSWORD` is used only to create the first `admin` account if the database does not already contain one. After bootstrap, database-backed users are the source of truth.
 
 ## Optional settings
 
@@ -127,14 +129,16 @@ Important notes:
 ## How to use
 
 1. Visit `/admin` (redirects to `/admin/login`)
-2. Create a session (recommended: 30 rounds = Baseline 10 + Reward 10 + Punishment 10)
-3. Upload whitelist CSV (`student_id,name`) for that session
-4. Share join link: `https://public-goods.azurewebsites.net/join/<session_id>`
-5. Lock groups (random assignment; groups constrained to 3-7 students, target 5)
-6. For each round:
+2. Sign in as username `admin` with the bootstrap password from `ADMIN_PASSWORD`
+3. Create teacher accounts from the control panel; each teacher receives a temporary password and must change it on first login
+4. Teachers sign in at `/admin/login`, then create and manage only their own sessions
+5. Upload whitelist CSV (`student_id,name`) for that session
+6. Share join link: `https://public-goods.azurewebsites.net/join/<session_id>`
+7. Lock groups (random assignment; groups constrained to 3-7 students, target 5)
+8. For each round:
    - Open current round (contribution stage)
    - Students submit contribution (`0-10`)
    - Baseline round: close and compute directly
    - Reward/Punishment round: open action stage, let students submit/update actions, then compute when ready
-7. Use `/display/<session_id>` for classroom projection
-8. Export CSV from admin panel (long format: one row per student per round)
+9. Use `/display/<session_id>` for classroom projection
+10. Export CSV from the session admin panel (long format: one row per student per round)

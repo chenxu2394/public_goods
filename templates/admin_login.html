@@ -1,14 +1,14 @@
 {% extends "_base.html" %}
-{% set heading = "Admin Login" %}
-{% set subheading = "Enter admin password" %}
+{% set heading = "Sign In" %}
+{% set subheading = "Use your username and password" %}
 {% block content %}
 <div class="card">
   {% if not configured %}
-    <div class="err"><b>Server missing admin configuration</b></div>
+    <div class="err"><b>Server missing authentication configuration</b></div>
     <div class="muted" style="margin-top:8px;">
-      Set these in Azure Web App Configuration:
-      <div class="mono" style="margin-top:6px;">ADMIN_PASSWORD</div>
-      <div class="mono">SECRET_KEY</div>
+      {{ configuration_error }}
+      <div class="mono" style="margin-top:6px;">SECRET_KEY</div>
+      <div class="mono">ADMIN_PASSWORD (bootstrap only, first deploy)</div>
     </div>
   {% else %}
     {% if error %}
@@ -18,7 +18,9 @@
       <div class="pill ok" style="margin-bottom:8px;">Password changed. Please sign in with your new password.</div>
     {% endif %}
     <form method="post" action="/admin/login" style="margin-top:10px;">
-      <div class="muted">Admin password</div>
+      <div class="muted">Username</div>
+      <input name="username" type="text" autocomplete="username" required />
+      <div class="muted" style="margin-top:10px;">Password</div>
       <input name="password" type="password" required />
       <div style="margin-top:12px;">
         <button type="submit">Sign in</button>

@@ -1,5 +1,5 @@
 {% extends "_base.html" %}
-{% set heading = "Admin Home" %}
+{% set heading = "Control Panel" %}
 {% set subheading = "Create and manage classroom experiments" %}
 {% block top_right %}
 <form method="post" action="/admin/logout" style="display:inline;">
@@ -54,6 +54,20 @@
 </script>
 
 <div class="card">
+  <div><b>Signed in as:</b> <span class="mono">{{ user.username }}</span></div>
+  <div class="muted" style="margin-top:6px;">
+    {% if is_admin %}
+      Superuser access. You can manage all teachers and all sessions.
+    {% else %}
+      Teacher access. You can manage only your own sessions.
+    {% endif %}
+  </div>
+  {% if pw_change_required %}
+    <div class="pill warn" style="margin-top:10px;">You must change your password before managing sessions.</div>
+  {% endif %}
+</div>
+
+<div class="card">
   <h3>Change Password</h3>
   {% if pw_error %}<div class="pill warn" style="margin-bottom:8px;">{{ pw_error }}</div>{% endif %}
   {% if pw_success %}<div class="pill ok" style="margin-bottom:8px;">{{ pw_success }}</div>{% endif %}
@@ -76,6 +90,73 @@
   </form>
 </div>
 
+{% if is_admin %}
+<div class="card">
+  <h3>Teacher Accounts</h3>
+  {% if teacher_error %}<div class="pill warn" style="margin-bottom:8px;">{{ teacher_error }}</div>{% endif %}
+  {% if teacher_success %}<div class="pill ok" style="margin-bottom:8px;">{{ teacher_success }}</div>{% endif %}
+  {% if teacher_temp_password %}
+    <div class="pill warn" style="margin-bottom:8px;">
+      Temporary password for <b>{{ teacher_temp_password_username }}</b>: <span class="mono">{{ teacher_temp_password }}</span>
+    </div>
+  {% endif %}
+
+  <form method="post" action="/admin/teachers" class="row">
+    <div class="col">
+      <div class="muted">Teacher username</div>
+      <input name="username" placeholder="Teacher1" required />
+    </div>
+    <div class="col" style="align-self:flex-end;">
+      <button type="submit">Create Teacher</button>
+    </div>
+  </form>
+
+  {% if teachers|length == 0 %}
+    <div class="muted" style="margin-top:12px;">No teachers yet.</div>
+  {% else %}
+    <div class="table-scroll" style="margin-top:12px;">
+      <table>
+        <tr><th>Username</th><th>Status</th><th>Password</th><th>Access</th></tr>
+        {% for teacher in teachers %}
+          <tr>
+            <td class="mono">{{ teacher.username }}</td>
+            <td>
+              {% if teacher.disabled_at %}
+                <span class="pill warn">Disabled</span>
+              {% else %}
+                <span class="pill ok">Active</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if teacher.must_change_password == 1 %}
+                <span class="pill warn">Must change</span>
+              {% else %}
+                <span class="pill muted">Normal</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if teacher.disabled_at %}
+                <form method="post" action="/admin/teachers/{{ teacher.id }}/enable" style="display:inline;">
+                  <button type="submit">Enable</button>
+                </form>
+              {% else %}
+                <form method="post" action="/admin/teachers/{{ teacher.id }}/disable" style="display:inline;">
+                  <button type="submit">Disable</button>
+                </form>
+              {% endif %}
+              <form method="post" action="/admin/teachers/{{ teacher.id }}/reset_password" style="display:inline; margin-left:8px;">
+                <button type="submit">Reset Password</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </table>
+    </div>
+  {% endif %}
+</div>
+{% endif %}
+
+{% if not must_change_password %}
 <div class="card">
   <h3>Create New Session</h3>
   <div class="muted" style="margin-bottom:8px;">
@@ -107,18 +188,35 @@
     </div>
   </form>
 </div>
+{% endif %}
 
 <div class="card">
   <h3>Sessions</h3>
+  <div class="muted" style="margin-bottom:8px;">
+    {% if is_admin %}
+      You can review every session across all teachers.
+    {% else %}
+      You can review only the sessions that belong to your account.
+    {% endif %}
+  </div>
   {% if sessions|length == 0 %}
-    <div class="muted">No sessions yet. Create one first.</div>
+    <div class="muted">No sessions yet.</div>
   {% else %}
     <div class="table-scroll">
       <table>
-        <tr><th>Created at</th><th>Title</th><th>Parameters</th><th>Status</th><th>Open</th><th>Delete</th></tr>
+        <tr>
+          <th>Created at</th>
+          {% if is_admin %}<th>Owner</th>{% endif %}
+          <th>Title</th>
+          <th>Parameters</th>
+          <th>Status</th>
+          <th>Open</th>
+          <th>Delete</th>
+        </tr>
         {% for s in sessions %}
           <tr>
             <td class="mono">{{ s.created_at }}</td>
+            {% if is_admin %}<td class="mono">{{ s.owner_username or "admin" }}</td>{% endif %}
             <td>{{ s.title }}</td>
             <td>group size={{ s.group_size }}; multiplier={{ s.multiplier }}; endowment={{ s.endowment }}; rounds={{ s.rounds }}</td>
             <td>
@@ -126,11 +224,21 @@
               {% if s.round_open == 1 %}<span class="pill ok">Contribution open</span>{% elif s.action_open == 1 %}<span class="pill warn">Action open</span>{% else %}<span class="pill muted">Round closed</span>{% endif %}
               <span class="pill">Current round {{ s.current_round }}</span>
             </td>
-            <td><a href="/admin/{{ s.id }}">Manage</a></td>
             <td>
-              <form method="post" action="/admin/{{ s.id }}/delete">
-                <button type="button" onclick='openDeleteModal(this.form, {{ s.title|tojson }})'>Delete</button>
-              </form>
+              {% if must_change_password %}
+                <span class="muted">Change password first</span>
+              {% else %}
+                <a href="/admin/{{ s.id }}">Manage</a>
+              {% endif %}
+            </td>
+            <td>
+              {% if must_change_password %}
+                <span class="muted">Unavailable</span>
+              {% else %}
+                <form method="post" action="/admin/{{ s.id }}/delete">
+                  <button type="button" onclick='openDeleteModal(this.form, {{ s.title|tojson }})'>Delete</button>
+                </form>
+              {% endif %}
             </td>
           </tr>
         {% endfor %}

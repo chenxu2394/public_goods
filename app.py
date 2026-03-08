@@ -4,7 +4,6 @@ import os
 import sqlite3
 import secrets
 import datetime as dt
-import time
 import csv
 import io
 import base64
@@ -13,7 +12,7 @@ import hmac
 import hashlib
 import random
 import math
-from typing import List, Dict, Tuple, Optional
+from typing import Any, List, Dict, Tuple, Optional
 
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse
@@ -27,16 +26,22 @@ APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB_PATH = "/home/public_goods.db"
 DB_PATH = os.environ.get("PUBLIC_GOODS_DB_PATH", DEFAULT_DB_PATH)
 
-# Admin protection
+# Auth / account protection
 ADMIN_PASSWORD = (os.environ.get("ADMIN_PASSWORD") or "").strip()
-SECRET_KEY = os.environ.get("SECRET_KEY", "").strip()  # used to sign admin cookie tokens
-ADMIN_COOKIE_NAME = "pg_admin"
-ADMIN_TOKEN_TTL_SECONDS = 12 * 3600  # 12 hours
+SECRET_KEY = os.environ.get("SECRET_KEY", "").strip()  # used to sign auth cookie tokens
+AUTH_COOKIE_NAME = "pg_auth"
+LEGACY_ADMIN_COOKIE_NAME = "pg_admin"
+AUTH_TOKEN_TTL_SECONDS = 12 * 3600  # 12 hours
 ADMIN_COOKIE_SECURE = os.environ.get("ADMIN_COOKIE_SECURE", "1").strip().lower() not in {
     "0",
     "false",
     "no",
 }
+USER_ROLE_ADMIN = "admin"
+USER_ROLE_TEACHER = "teacher"
+PASSWORD_SCHEME_PBKDF2 = "pbkdf2_sha256_v1"
+PASSWORD_SCHEME_LEGACY_ADMIN = "legacy_admin_secretkey_v1"
+PASSWORD_HASH_ITERATIONS = 200_000
 
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://public-goods.azurewebsites.net").rstrip("/")
 
@@ -56,7 +61,7 @@ ACTION_COST = 1.0
 REWARD_EFFECT = 2.0
 PUNISH_EFFECT = 3.0
 
-app = FastAPI(title="Public Goods Experiment (Azure + Whitelist + Admin Password)")
+app = FastAPI(title="Public Goods Experiment (Azure + Multi-User Auth)")
 templates = Jinja2Templates(directory=os.path.join(APP_DIR, "templates"))
 
 
@@ -121,6 +126,188 @@ def _backfill_anonymous_ids(conn: sqlite3.Connection) -> None:
             updates.append((aid, s["id"]))
         if updates:
             conn.executemany("UPDATE students SET anonymous_id=? WHERE id=?", updates)
+
+
+def _normalize_username(username: str) -> str:
+    return username.strip().casefold()
+
+
+def _validate_username(username: str) -> str:
+    value = username.strip()
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+    if len(value) < 3 or len(value) > 32:
+        raise HTTPException(400, "Username must be 3-32 characters.")
+    if any(ch not in allowed for ch in value):
+        raise HTTPException(400, "Username may contain only letters, numbers, '.', '_' or '-'.")
+    return value
+
+
+def _generate_password_salt() -> str:
+    return _b64url(secrets.token_bytes(16))
+
+
+def _hash_password_with_salt(password: str, salt: str) -> str:
+    dk = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        _b64url_decode(salt),
+        PASSWORD_HASH_ITERATIONS,
+    )
+    return _b64url(dk)
+
+
+def _hash_password_record(password: str) -> Tuple[str, str]:
+    salt = _generate_password_salt()
+    return _hash_password_with_salt(password, salt), salt
+
+
+def _legacy_hash_password(password: str) -> str:
+    if not SECRET_KEY:
+        return ""
+    dk = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        SECRET_KEY.encode("utf-8"),
+        100_000,
+    )
+    return _b64url(dk)
+
+
+def _get_setting_conn(conn: sqlite3.Connection, key: str) -> Optional[str]:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def _create_user_conn(
+    conn: sqlite3.Connection,
+    username: str,
+    role: str,
+    *,
+    password: Optional[str] = None,
+    password_scheme: Optional[str] = None,
+    password_hash: Optional[str] = None,
+    password_salt: Optional[str] = None,
+    password_version: int = 1,
+    must_change_password: bool = False,
+) -> sqlite3.Row:
+    if role not in {USER_ROLE_ADMIN, USER_ROLE_TEACHER}:
+        raise ValueError("Invalid user role")
+    username = _validate_username(username)
+    username_norm = _normalize_username(username)
+    if password is not None:
+        password_hash, password_salt = _hash_password_record(password)
+        password_scheme = PASSWORD_SCHEME_PBKDF2
+    if not password_scheme or password_hash is None or password_salt is None:
+        raise ValueError("Password material is required")
+
+    now = now_iso()
+    user_id = secrets.token_urlsafe(8)
+    conn.execute(
+        """
+        INSERT INTO users(
+            id, username, username_norm, role, password_scheme, password_hash, password_salt,
+            password_version, must_change_password, disabled_at, created_at, updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+    """,
+        (
+            user_id,
+            username,
+            username_norm,
+            role,
+            password_scheme,
+            password_hash,
+            password_salt,
+            int(password_version),
+            1 if must_change_password else 0,
+            None,
+            now,
+            now,
+        ),
+    )
+    return conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+
+
+def _set_user_password_conn(
+    conn: sqlite3.Connection,
+    user_id: str,
+    new_password: str,
+    *,
+    must_change_password: bool,
+) -> None:
+    password_hash, password_salt = _hash_password_record(new_password)
+    conn.execute(
+        """
+        UPDATE users
+        SET password_scheme=?, password_hash=?, password_salt=?,
+            password_version=password_version + 1,
+            must_change_password=?, updated_at=?
+        WHERE id=?
+    """,
+        (
+            PASSWORD_SCHEME_PBKDF2,
+            password_hash,
+            password_salt,
+            1 if must_change_password else 0,
+            now_iso(),
+            user_id,
+        ),
+    )
+
+
+def _rehash_legacy_user_password_conn(conn: sqlite3.Connection, user_id: str, entered_password: str) -> None:
+    password_hash, password_salt = _hash_password_record(entered_password)
+    conn.execute(
+        """
+        UPDATE users
+        SET password_scheme=?, password_hash=?, password_salt=?, updated_at=?
+        WHERE id=?
+    """,
+        (
+            PASSWORD_SCHEME_PBKDF2,
+            password_hash,
+            password_salt,
+            now_iso(),
+            user_id,
+        ),
+    )
+    conn.execute("DELETE FROM settings WHERE key IN ('admin_password_hash', 'password_changed_at')")
+
+
+def _ensure_bootstrap_admin(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    admin = conn.execute(
+        "SELECT * FROM users WHERE username_norm=?",
+        (_normalize_username("admin"),),
+    ).fetchone()
+    if admin:
+        return admin
+
+    legacy_hash = (_get_setting_conn(conn, "admin_password_hash") or "").strip()
+    if legacy_hash:
+        return _create_user_conn(
+            conn,
+            "admin",
+            USER_ROLE_ADMIN,
+            password_scheme=PASSWORD_SCHEME_LEGACY_ADMIN,
+            password_hash=legacy_hash,
+            password_salt="",
+        )
+
+    if ADMIN_PASSWORD:
+        return _create_user_conn(conn, "admin", USER_ROLE_ADMIN, password=ADMIN_PASSWORD)
+
+    return None
+
+
+def _backfill_session_owners(conn: sqlite3.Connection, admin_user_id: str) -> None:
+    conn.execute(
+        """
+        UPDATE sessions
+        SET owner_user_id=?
+        WHERE owner_user_id IS NULL OR TRIM(owner_user_id)=''
+    """,
+        (admin_user_id,),
+    )
 
 
 def phase_for_round(round_no: int) -> Tuple[str, int]:
@@ -189,6 +376,26 @@ def qr_svg_data_uri(content: str) -> str:
 def init_db():
     conn = db()
     cur = conn.cursor()
+
+    cur.execute(
+        """
+    CREATE TABLE IF NOT EXISTS users(
+        id TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        username_norm TEXT NOT NULL,
+        role TEXT NOT NULL,
+        password_scheme TEXT NOT NULL,
+        password_hash TEXT NOT NULL,
+        password_salt TEXT NOT NULL,
+        password_version INTEGER NOT NULL DEFAULT 1,
+        must_change_password INTEGER NOT NULL DEFAULT 0,
+        disabled_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """
+    )
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_norm ON users(username_norm)")
 
     cur.execute(
         """
@@ -305,6 +512,7 @@ def init_db():
     _migrate_student_identifier_columns(conn)
 
     _ensure_column(conn, "sessions", "action_open", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "sessions", "owner_user_id", "TEXT")
     _ensure_column(conn, "students", "anonymous_id", "TEXT")
 
     _ensure_column(conn, "results", "contrib", "INTEGER NOT NULL DEFAULT 0")
@@ -315,32 +523,17 @@ def init_db():
     _ensure_column(conn, "results", "action_cost", "REAL NOT NULL DEFAULT 0")
     _ensure_column(conn, "results", "action_effect", "REAL NOT NULL DEFAULT 0")
 
+    admin_user = _ensure_bootstrap_admin(conn)
+    if admin_user is not None:
+        _backfill_session_owners(conn, admin_user["id"])
+
     _backfill_anonymous_ids(conn)
 
     conn.commit()
     conn.close()
 
 
-# ---------------- Admin auth (signed cookie token) ----------------
-
-def _is_admin_configured() -> bool:
-    """Return True if the admin can log in (SECRET_KEY set AND either env ADMIN_PASSWORD or a
-    DB-stored password hash exists).  Used by both _must_configure_admin() and the login UI so
-    they stay consistent after a password-reset flow."""
-    if not SECRET_KEY:
-        return False
-    return bool(ADMIN_PASSWORD) or get_setting("admin_password_hash") is not None
-
-
-def _must_configure_admin() -> None:
-    if not SECRET_KEY:
-        raise HTTPException(500, "Server missing SECRET_KEY configuration.")
-    # Accept either the env ADMIN_PASSWORD or a DB-stored hash (set via password reset).
-    # This ensures admin login works after the forgot-password flow even when the
-    # ADMIN_PASSWORD env var was never set.
-    if not _is_admin_configured():
-        raise HTTPException(500, "Server missing ADMIN_PASSWORD configuration.")
-
+# ---------------- Auth ----------------
 
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
@@ -354,108 +547,6 @@ def _b64url_decode(s: str) -> bytes:
 def _sign(message: bytes) -> str:
     mac = hmac.new(SECRET_KEY.encode("utf-8"), message, hashlib.sha256).digest()
     return _b64url(mac)
-
-
-def make_admin_token() -> str:
-    _must_configure_admin()
-    payload = {"ts": int(dt.datetime.now().timestamp() * 1000)}
-    body = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
-    sig = _sign(body.encode("utf-8"))
-    return f"{body}.{sig}"
-
-
-# In-memory cache for password_changed_at epoch — reduces DB hits on admin requests.
-# The cache is refreshed from the DB at most once per _PASSWORD_EPOCH_CACHE_TTL_SECONDS so that
-# password changes made by another worker (in multi-process deployments) are picked up within
-# that window.  _update_password_epoch() always writes the DB *and* immediately updates the cache
-# for the current process, so revocation is instant in single-process deployments.
-_PASSWORD_EPOCH_CACHE_TTL_SECONDS = 30  # re-read DB if cache is older than this
-_password_epoch_cache: Optional[int] = None
-_password_epoch_cache_ts: float = float("-inf")  # time.monotonic() of last DB read; -inf means "never read"
-
-
-def verify_admin_token(token: str) -> bool:
-    global _password_epoch_cache, _password_epoch_cache_ts
-    try:
-        _must_configure_admin()
-        if not token or "." not in token:
-            return False
-        body, sig = token.split(".", 1)
-        expected = _sign(body.encode("utf-8"))
-        if not hmac.compare_digest(expected, sig):
-            return False
-        payload = json.loads(_b64url_decode(body).decode("utf-8"))
-        ts = int(payload.get("ts", 0))
-        now_ts = int(dt.datetime.now().timestamp() * 1000)
-        if ts <= 0 or now_ts - ts > ADMIN_TOKEN_TTL_SECONDS * 1000:
-            return False
-        # Reject tokens issued before the last password change (server-side revocation).
-        # Refresh the cache from the DB if the cached value is stale (TTL expired) or absent.
-        cache_age = time.monotonic() - _password_epoch_cache_ts
-        if _password_epoch_cache is None or cache_age >= _PASSWORD_EPOCH_CACHE_TTL_SECONDS:
-            epoch_data = get_setting("password_changed_at")
-            # If the setting is missing (e.g. fresh DB), treat as "no password change yet"
-            # by using epoch 0. Genuine DB exceptions will still be caught by the outer try.
-            if epoch_data is None:
-                _password_epoch_cache = 0
-                _password_epoch_cache_ts = time.monotonic()
-            else:
-                epoch_str = str(epoch_data).strip()
-                if not epoch_str:
-                    # No password change recorded yet; treat as "no revocation epoch"
-                    _password_epoch_cache = 0
-                    _password_epoch_cache_ts = time.monotonic()
-                else:
-                    try:
-                        _password_epoch_cache = int(epoch_str)
-                    except ValueError:
-                        # Malformed epoch data — fail closed to avoid keeping old sessions alive
-                        return False
-                    _password_epoch_cache_ts = time.monotonic()
-        if _password_epoch_cache is not None and ts <= _password_epoch_cache:
-            return False
-        return True
-    except Exception:
-        return False
-
-
-def _commit_password_change(new_hash: str, *, invalidate_token: bool = False) -> None:
-    """Atomically update the admin password hash and password_changed_at epoch (in ms).
-
-    Performs all writes in a single DB transaction so that a crash between writes
-    cannot leave the hash and epoch in inconsistent states.
-
-    If *invalidate_token* is True, the ``password_reset_token`` setting is also
-    deleted in the same transaction, preventing replay of a used reset link.
-    """
-    global _password_epoch_cache, _password_epoch_cache_ts
-    now = int(dt.datetime.now().timestamp() * 1000)
-    upsert_sql = (
-        "INSERT INTO settings(key, value) VALUES(?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value=excluded.value"
-    )
-    conn = db()
-    try:
-        conn.execute(upsert_sql, ("admin_password_hash", new_hash))
-        conn.execute(upsert_sql, ("password_changed_at", str(now)))
-        if invalidate_token:
-            conn.execute("DELETE FROM settings WHERE key = 'password_reset_token'")
-        conn.commit()
-        _password_epoch_cache = now
-        _password_epoch_cache_ts = time.monotonic()
-    finally:
-        conn.close()
-
-
-def _hash_password(password: str) -> str:
-    """Hash a password using PBKDF2-HMAC-SHA256 with SECRET_KEY as salt."""
-    dk = hashlib.pbkdf2_hmac(
-        "sha256",
-        password.encode("utf-8"),
-        SECRET_KEY.encode("utf-8"),
-        100_000,
-    )
-    return _b64url(dk)
 
 
 def get_setting(key: str) -> Optional[str]:
@@ -481,41 +572,271 @@ def set_setting(key: str, value: str) -> None:
         conn.close()
 
 
-def check_admin_password(entered: str) -> bool:
-    """Check if the entered password matches the current admin password.
-    Checks the DB-stored hash first; falls back to the ADMIN_PASSWORD env var."""
-    stored_hash = get_setting("admin_password_hash")
-    if stored_hash is not None:
-        return hmac.compare_digest(stored_hash, _hash_password(entered))
-    return entered == ADMIN_PASSWORD
-
-def is_admin(request: Request) -> bool:
-    token = request.cookies.get(ADMIN_COOKIE_NAME, "")
-    return verify_admin_token(token)
+def get_user_by_id(user_id: str) -> Optional[sqlite3.Row]:
+    conn = db()
+    try:
+        return conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    finally:
+        conn.close()
 
 
-def _admin_gate(request: Request) -> Optional[RedirectResponse]:
-    if not is_admin(request):
-        return RedirectResponse(url="/admin/login", status_code=303)
-    return None
+def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
+    username_norm = _normalize_username(username)
+    conn = db()
+    try:
+        return conn.execute("SELECT * FROM users WHERE username_norm=?", (username_norm,)).fetchone()
+    finally:
+        conn.close()
 
 
-# ---------------- Core helpers ----------------
+def list_teachers(*, active_only: bool = False) -> List[sqlite3.Row]:
+    conn = db()
+    try:
+        if active_only:
+            return conn.execute(
+                """
+                SELECT *
+                FROM users
+                WHERE role=? AND disabled_at IS NULL
+                ORDER BY username_norm ASC
+            """,
+                (USER_ROLE_TEACHER,),
+            ).fetchall()
+        return conn.execute(
+            """
+            SELECT *
+            FROM users
+            WHERE role=?
+            ORDER BY username_norm ASC
+        """,
+            (USER_ROLE_TEACHER,),
+        ).fetchall()
+    finally:
+        conn.close()
+
+
+def create_user(username: str, role: str, password: str, *, must_change_password: bool) -> sqlite3.Row:
+    conn = db()
+    try:
+        user = _create_user_conn(
+            conn,
+            username,
+            role,
+            password=password,
+            must_change_password=must_change_password,
+        )
+        conn.commit()
+        return user
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def set_user_password(user_id: str, new_password: str, *, must_change_password: bool) -> None:
+    conn = db()
+    try:
+        _set_user_password_conn(
+            conn,
+            user_id,
+            new_password,
+            must_change_password=must_change_password,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_user_disabled(user_id: str, disabled: bool) -> None:
+    conn = db()
+    try:
+        conn.execute(
+            "UPDATE users SET disabled_at=?, updated_at=? WHERE id=?",
+            (now_iso() if disabled else None, now_iso(), user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def transfer_session_owner(session_id: str, owner_user_id: str) -> None:
+    conn = db()
+    try:
+        conn.execute(
+            "UPDATE sessions SET owner_user_id=? WHERE id=?",
+            (owner_user_id, session_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def verify_user_password(user: sqlite3.Row, entered: str) -> Tuple[bool, bool]:
+    scheme = str(user["password_scheme"] or "")
+    if scheme == PASSWORD_SCHEME_PBKDF2:
+        salt = str(user["password_salt"] or "")
+        expected = _hash_password_with_salt(entered, salt)
+        return hmac.compare_digest(str(user["password_hash"] or ""), expected), False
+    if scheme == PASSWORD_SCHEME_LEGACY_ADMIN and user["role"] == USER_ROLE_ADMIN:
+        expected = _legacy_hash_password(entered)
+        return hmac.compare_digest(str(user["password_hash"] or ""), expected), True
+    return False, False
+
+
+def _is_auth_configured() -> bool:
+    return bool(SECRET_KEY) and get_user_by_username("admin") is not None
+
+
+def _auth_configuration_error() -> str:
+    if not SECRET_KEY:
+        return "Set SECRET_KEY to sign login cookies."
+    return "No admin account is available. On first boot set ADMIN_PASSWORD so the app can create one."
+
+
+def _must_configure_auth() -> None:
+    if not _is_auth_configured():
+        raise HTTPException(500, _auth_configuration_error())
+
+
+def make_auth_token(user: sqlite3.Row) -> str:
+    _must_configure_auth()
+    payload = {
+        "uid": str(user["id"]),
+        "role": str(user["role"]),
+        "pv": int(user["password_version"]),
+        "ts": int(dt.datetime.now().timestamp() * 1000),
+    }
+    body = _b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    sig = _sign(body.encode("utf-8"))
+    return f"{body}.{sig}"
+
+
+def verify_auth_token(token: str) -> Optional[Dict[str, Any]]:
+    try:
+        _must_configure_auth()
+        if not token or "." not in token:
+            return None
+        body, sig = token.split(".", 1)
+        expected = _sign(body.encode("utf-8"))
+        if not hmac.compare_digest(expected, sig):
+            return None
+        payload = json.loads(_b64url_decode(body).decode("utf-8"))
+        ts = int(payload.get("ts", 0))
+        now_ts = int(dt.datetime.now().timestamp() * 1000)
+        if ts <= 0 or now_ts - ts > AUTH_TOKEN_TTL_SECONDS * 1000:
+            return None
+        if not payload.get("uid") or not payload.get("role"):
+            return None
+        payload["pv"] = int(payload.get("pv", 0))
+        if payload["pv"] <= 0:
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def generate_temp_password(length: int = 14) -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def get_current_user(request: Request) -> Optional[sqlite3.Row]:
+    if getattr(request.state, "_auth_loaded", False):
+        return getattr(request.state, "_auth_user", None)
+
+    request.state._auth_loaded = True
+    request.state._auth_user = None
+
+    payload = verify_auth_token(request.cookies.get(AUTH_COOKIE_NAME, ""))
+    if not payload:
+        return None
+
+    user = get_user_by_id(str(payload["uid"]))
+    if not user:
+        return None
+    if user["disabled_at"] is not None:
+        return None
+    if str(user["role"]) != str(payload["role"]):
+        return None
+    if int(user["password_version"]) != int(payload["pv"]):
+        return None
+
+    request.state._auth_user = user
+    return user
+
+
+def _auth_gate(request: Request) -> Tuple[Optional[sqlite3.Row], Optional[RedirectResponse]]:
+    user = get_current_user(request)
+    if not user:
+        return None, RedirectResponse(url="/admin/login", status_code=303)
+    return user, None
+
+
+def _management_gate(request: Request, *, admin_only: bool = False) -> Tuple[Optional[sqlite3.Row], Optional[RedirectResponse]]:
+    user, gate = _auth_gate(request)
+    if gate:
+        return None, gate
+    if admin_only and user["role"] != USER_ROLE_ADMIN:
+        raise HTTPException(404, "Not found")
+    if int(user["must_change_password"]) == 1:
+        return user, RedirectResponse(url="/admin?pw_change_required=1", status_code=303)
+    return user, None
+
 
 def get_session(session_id: str) -> sqlite3.Row:
     conn = db()
-    row = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+    row = conn.execute(
+        """
+        SELECT s.*, u.username AS owner_username
+        FROM sessions s
+        LEFT JOIN users u ON u.id=s.owner_user_id
+        WHERE s.id=?
+    """,
+        (session_id,),
+    ).fetchone()
     conn.close()
     if not row:
         raise HTTPException(404, "Session not found")
     return row
 
 
-def list_sessions() -> List[sqlite3.Row]:
+def get_session_for_user(session_id: str, user: sqlite3.Row) -> sqlite3.Row:
+    sess = get_session(session_id)
+    if user["role"] != USER_ROLE_ADMIN and sess["owner_user_id"] != user["id"]:
+        raise HTTPException(404, "Session not found")
+    return sess
+
+
+def list_sessions(owner_user_id: Optional[str] = None) -> List[sqlite3.Row]:
     conn = db()
-    rows = conn.execute("SELECT * FROM sessions ORDER BY created_at DESC").fetchall()
-    conn.close()
-    return rows
+    try:
+        if owner_user_id is None:
+            rows = conn.execute(
+                """
+                SELECT s.*, u.username AS owner_username
+                FROM sessions s
+                LEFT JOIN users u ON u.id=s.owner_user_id
+                ORDER BY s.created_at DESC
+            """
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT s.*, u.username AS owner_username
+                FROM sessions s
+                LEFT JOIN users u ON u.id=s.owner_user_id
+                WHERE s.owner_user_id=?
+                ORDER BY s.created_at DESC
+            """,
+                (owner_user_id,),
+            ).fetchall()
+        return rows
+    finally:
+        conn.close()
+
+
+# ---------------- Core helpers ----------------
 
 
 def list_students(session_id: str) -> List[sqlite3.Row]:
@@ -1004,43 +1325,143 @@ def home(request: Request):
 
 # ---------------- Admin login/logout ----------------
 
-@app.get("/admin/login", response_class=HTMLResponse)
-def admin_login_page(request: Request):
-    configured = _is_admin_configured()
-    pw_changed = request.query_params.get("pw_changed") == "1"
+def _render_login_page(request: Request, *, status_code: int = 200, **extra: object):
+    context = {
+        "request": request,
+        "configured": _is_auth_configured(),
+        "configuration_error": _auth_configuration_error(),
+        "pw_changed": request.query_params.get("pw_changed") == "1",
+    }
+    context.update(extra)
+    return templates.TemplateResponse("admin_login.html", context, status_code=status_code)
+
+
+def _build_admin_home_context(request: Request, user: sqlite3.Row, **extra: object) -> Dict[str, object]:
+    is_admin = user["role"] == USER_ROLE_ADMIN
+    must_change_password = int(user["must_change_password"]) == 1
+    context: Dict[str, object] = {
+        "request": request,
+        "user": user,
+        "is_admin": is_admin,
+        "must_change_password": must_change_password,
+        "pw_change_required": must_change_password or request.query_params.get("pw_change_required") == "1",
+        "sessions": list_sessions() if is_admin else list_sessions(str(user["id"])),
+        "teachers": list_teachers() if is_admin else [],
+    }
+    context.update(extra)
+    return context
+
+
+def _render_admin_home(
+    request: Request,
+    user: sqlite3.Row,
+    *,
+    status_code: int = 200,
+    **extra: object,
+):
     return templates.TemplateResponse(
-        "admin_login.html", {"request": request, "configured": configured, "pw_changed": pw_changed}
+        "admin_home.html",
+        _build_admin_home_context(request, user, **extra),
+        status_code=status_code,
     )
 
 
+def _get_teacher_or_404(user_id: str) -> sqlite3.Row:
+    user = get_user_by_id(user_id)
+    if not user or user["role"] != USER_ROLE_TEACHER:
+        raise HTTPException(404, "Teacher not found")
+    return user
+
+
+def _render_admin_panel(
+    request: Request,
+    user: sqlite3.Row,
+    sess: sqlite3.Row,
+    *,
+    status_code: int = 200,
+    **extra: object,
+):
+    students = list_students(str(sess["id"]))
+    counts = session_counts(str(sess["id"]))
+
+    join_url = f"{PUBLIC_BASE_URL}/join/{sess['id']}"
+    join_qr_data_uri = qr_svg_data_uri(join_url)
+    export_url = f"{PUBLIC_BASE_URL}/admin/{sess['id']}/export"
+    template_url = f"{PUBLIC_BASE_URL}/admin/{sess['id']}/whitelist/template"
+    display_url = f"{PUBLIC_BASE_URL}/display/{sess['id']}"
+
+    context: Dict[str, object] = {
+        "request": request,
+        "user": user,
+        "is_admin": user["role"] == USER_ROLE_ADMIN,
+        "sess": sess,
+        "students": students,
+        "counts": counts,
+        "join_url": join_url,
+        "join_qr_data_uri": join_qr_data_uri,
+        "export_url": export_url,
+        "template_url": template_url,
+        "display_url": display_url,
+        "round_ctx": round_context(sess),
+        "computed_rounds": count_computed_rounds(str(sess["id"])),
+        "transfer_teachers": list_teachers(active_only=True) if user["role"] == USER_ROLE_ADMIN else [],
+    }
+    context.update(extra)
+    return templates.TemplateResponse("admin_panel.html", context, status_code=status_code)
+
+
+@app.get("/admin/login", response_class=HTMLResponse)
+def admin_login_page(request: Request):
+    if get_current_user(request):
+        return RedirectResponse(url="/admin", status_code=303)
+    return _render_login_page(request)
+
+
 @app.post("/admin/login")
-def admin_login_submit(request: Request, password: str = Form(...)):
-    _must_configure_admin()
-    if not check_admin_password(password):
-        return templates.TemplateResponse(
-            "admin_login.html",
-            {"request": request, "configured": True, "error": "Incorrect password"},
-            status_code=401,
-        )
-    token = make_admin_token()
-    resp = RedirectResponse(url="/admin", status_code=303)
+def admin_login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
+    _must_configure_auth()
+    user = get_user_by_username(username)
+    if not user:
+        return _render_login_page(request, status_code=401, error="Incorrect username or password.")
+    if user["disabled_at"] is not None:
+        return _render_login_page(request, status_code=403, error="This account is disabled.")
+
+    password_ok, needs_rehash = verify_user_password(user, password)
+    if not password_ok:
+        return _render_login_page(request, status_code=401, error="Incorrect username or password.")
+
+    if needs_rehash:
+        conn = db()
+        try:
+            _rehash_legacy_user_password_conn(conn, str(user["id"]), password)
+            conn.commit()
+        finally:
+            conn.close()
+        user = get_user_by_id(str(user["id"]))
+
+    token = make_auth_token(user)
+    redirect_url = "/admin?pw_change_required=1" if int(user["must_change_password"]) == 1 else "/admin"
+    resp = RedirectResponse(url=redirect_url, status_code=303)
     resp.set_cookie(
-        ADMIN_COOKIE_NAME,
+        AUTH_COOKIE_NAME,
         token,
         httponly=True,
         secure=ADMIN_COOKIE_SECURE,
         samesite="lax",
-        max_age=ADMIN_TOKEN_TTL_SECONDS,
+        max_age=AUTH_TOKEN_TTL_SECONDS,
         path="/",
     )
+    resp.delete_cookie(LEGACY_ADMIN_COOKIE_NAME, path="/")
     return resp
 
 
 @app.post("/admin/logout")
 def admin_logout():
     resp = RedirectResponse(url="/admin/login", status_code=303)
-    resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
+    resp.delete_cookie(AUTH_COOKIE_NAME, path="/")
+    resp.delete_cookie(LEGACY_ADMIN_COOKIE_NAME, path="/")
     return resp
+
 
 @app.post("/admin/change_password")
 def admin_change_password(
@@ -1049,27 +1470,24 @@ def admin_change_password(
     new_password: str = Form(...),
     confirm_password: str = Form(...),
 ):
-    gate = _admin_gate(request)
+    user, gate = _auth_gate(request)
     if gate:
         return gate
-    sessions = list_sessions()
 
     def _render_error(error: str):
-        return templates.TemplateResponse(
-            "admin_home.html",
-            {"request": request, "sessions": sessions, "pw_error": error},
-            status_code=400,
-        )
+        return _render_admin_home(request, user, status_code=400, pw_error=error)
 
-    if not check_admin_password(current_password):
+    password_ok, _ = verify_user_password(user, current_password)
+    if not password_ok:
         return _render_error("Current password is incorrect.")
     if not new_password:
         return _render_error("New password must not be empty.")
     if new_password != confirm_password:
         return _render_error("New passwords do not match.")
-    _commit_password_change(_hash_password(new_password))
+    set_user_password(str(user["id"]), new_password, must_change_password=False)
     resp = RedirectResponse(url="/admin/login?pw_changed=1", status_code=303)
-    resp.delete_cookie(ADMIN_COOKIE_NAME, path="/")
+    resp.delete_cookie(AUTH_COOKIE_NAME, path="/")
+    resp.delete_cookie(LEGACY_ADMIN_COOKIE_NAME, path="/")
     return resp
 
 
@@ -1077,11 +1495,79 @@ def admin_change_password(
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin_home(request: Request):
-    gate = _admin_gate(request)
+    user, gate = _auth_gate(request)
     if gate:
         return gate
-    sessions = list_sessions()
-    return templates.TemplateResponse("admin_home.html", {"request": request, "sessions": sessions})
+    return _render_admin_home(request, user)
+
+
+@app.post("/admin/teachers")
+def admin_create_teacher(request: Request, username: str = Form(...)):
+    user, gate = _management_gate(request, admin_only=True)
+    if gate:
+        return gate
+
+    try:
+        username = _validate_username(username)
+        temp_password = generate_temp_password()
+        create_user(
+            username,
+            USER_ROLE_TEACHER,
+            temp_password,
+            must_change_password=True,
+        )
+    except HTTPException as exc:
+        return _render_admin_home(request, user, status_code=exc.status_code, teacher_error=exc.detail)
+    except sqlite3.IntegrityError:
+        return _render_admin_home(request, user, status_code=400, teacher_error="That username already exists.")
+
+    return _render_admin_home(
+        request,
+        user,
+        teacher_success=f"Created teacher '{username}'.",
+        teacher_temp_password=temp_password,
+        teacher_temp_password_username=username,
+    )
+
+
+@app.post("/admin/teachers/{user_id}/disable")
+def admin_disable_teacher(request: Request, user_id: str):
+    user, gate = _management_gate(request, admin_only=True)
+    if gate:
+        return gate
+
+    teacher = _get_teacher_or_404(user_id)
+    set_user_disabled(str(teacher["id"]), True)
+    return RedirectResponse(url="/admin", status_code=303)
+
+
+@app.post("/admin/teachers/{user_id}/enable")
+def admin_enable_teacher(request: Request, user_id: str):
+    user, gate = _management_gate(request, admin_only=True)
+    if gate:
+        return gate
+
+    teacher = _get_teacher_or_404(user_id)
+    set_user_disabled(str(teacher["id"]), False)
+    return RedirectResponse(url="/admin", status_code=303)
+
+
+@app.post("/admin/teachers/{user_id}/reset_password")
+def admin_reset_teacher_password(request: Request, user_id: str):
+    user, gate = _management_gate(request, admin_only=True)
+    if gate:
+        return gate
+
+    teacher = _get_teacher_or_404(user_id)
+    temp_password = generate_temp_password()
+    set_user_password(str(teacher["id"]), temp_password, must_change_password=True)
+    return _render_admin_home(
+        request,
+        user,
+        teacher_success=f"Reset password for '{teacher['username']}'.",
+        teacher_temp_password=temp_password,
+        teacher_temp_password_username=str(teacher["username"]),
+    )
 
 
 @app.post("/admin/create")
@@ -1093,7 +1579,7 @@ def admin_create_session(
     endowment: int = Form(10),
     rounds: int = Form(TOTAL_EXPERIMENT_ROUNDS),
 ):
-    gate = _admin_gate(request)
+    user, gate = _management_gate(request)
     if gate:
         return gate
 
@@ -1110,10 +1596,26 @@ def admin_create_session(
     conn = db()
     conn.execute(
         """
-        INSERT INTO sessions(id, title, group_size, multiplier, endowment, rounds, created_at, locked, current_round, round_open, action_open)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO sessions(
+            id, title, group_size, multiplier, endowment, rounds, created_at,
+            locked, current_round, round_open, action_open, owner_user_id
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
     """,
-        (session_id, title, group_size, multiplier, endowment, rounds, now_iso(), 0, 1, 0, 0),
+        (
+            session_id,
+            title,
+            group_size,
+            multiplier,
+            endowment,
+            rounds,
+            now_iso(),
+            0,
+            1,
+            0,
+            0,
+            str(user["id"]),
+        ),
     )
     conn.commit()
     conn.close()
@@ -1122,48 +1624,59 @@ def admin_create_session(
 
 @app.get("/admin/{session_id}", response_class=HTMLResponse)
 def admin_panel(request: Request, session_id: str):
-    gate = _admin_gate(request)
+    user, gate = _management_gate(request)
     if gate:
         return gate
 
-    sess = get_session(session_id)
-    students = list_students(session_id)
-    counts = session_counts(session_id)
+    sess = get_session_for_user(session_id, user)
+    return _render_admin_panel(request, user, sess)
 
-    join_url = f"{PUBLIC_BASE_URL}/join/{session_id}"
-    join_qr_data_uri = qr_svg_data_uri(join_url)
-    export_url = f"{PUBLIC_BASE_URL}/admin/{session_id}/export"
-    template_url = f"{PUBLIC_BASE_URL}/admin/{session_id}/whitelist/template"
-    display_url = f"{PUBLIC_BASE_URL}/display/{session_id}"
 
-    ctx = round_context(sess)
-    computed_rounds = count_computed_rounds(session_id)
+@app.post("/admin/{session_id}/transfer")
+def admin_transfer_session(request: Request, session_id: str, teacher_user_id: str = Form(...)):
+    user, gate = _management_gate(request, admin_only=True)
+    if gate:
+        return gate
 
-    return templates.TemplateResponse(
-        "admin_panel.html",
-        {
-            "request": request,
-            "sess": sess,
-            "students": students,
-            "counts": counts,
-            "join_url": join_url,
-            "join_qr_data_uri": join_qr_data_uri,
-            "export_url": export_url,
-            "template_url": template_url,
-            "display_url": display_url,
-            "round_ctx": ctx,
-            "computed_rounds": computed_rounds,
-        },
+    sess = get_session_for_user(session_id, user)
+    teacher_user_id = teacher_user_id.strip()
+    teacher = get_user_by_id(teacher_user_id)
+    if not teacher or teacher["role"] != USER_ROLE_TEACHER:
+        return _render_admin_panel(request, user, sess, status_code=400, transfer_error="Select a valid teacher.")
+    if teacher["disabled_at"] is not None:
+        return _render_admin_panel(
+            request,
+            user,
+            sess,
+            status_code=400,
+            transfer_error="You cannot transfer a session to a disabled teacher.",
+        )
+    if sess["owner_user_id"] == teacher["id"]:
+        return _render_admin_panel(
+            request,
+            user,
+            sess,
+            status_code=400,
+            transfer_error=f"Session is already assigned to '{teacher['username']}'.",
+        )
+
+    transfer_session_owner(session_id, str(teacher["id"]))
+    updated_sess = get_session(session_id)
+    return _render_admin_panel(
+        request,
+        user,
+        updated_sess,
+        transfer_success=f"Session transferred to '{teacher['username']}'.",
     )
 
 
 @app.post("/admin/{session_id}/lock")
 def admin_lock(request: Request, session_id: str):
-    gate = _admin_gate(request)
+    user, gate = _management_gate(request)
     if gate:
         return gate
 
-    sess = get_session(session_id)
+    sess = get_session_for_user(session_id, user)
     if int(sess["locked"]) == 0:
         lock_groups(session_id, int(sess["group_size"]))
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
@@ -1171,7 +1684,7 @@ def admin_lock(request: Request, session_id: str):
 
 @app.post("/admin/{session_id}/switch_phase")
 def admin_switch_phase(request: Request, session_id: str, phase: str = Form(...)):
-    gate = _admin_gate(request)
+    user, gate = _management_gate(request)
     if gate:
         return gate
 
@@ -1179,7 +1692,7 @@ def admin_switch_phase(request: Request, session_id: str, phase: str = Form(...)
     if phase not in PHASES:
         raise HTTPException(400, "invalid phase")
 
-    sess = get_session(session_id)
+    sess = get_session_for_user(session_id, user)
     rounds = int(sess["rounds"])
     start = phase_start_round(phase)
     if start > rounds:
@@ -1209,11 +1722,11 @@ def admin_switch_phase(request: Request, session_id: str, phase: str = Form(...)
 
 @app.post("/admin/{session_id}/open_round")
 def admin_open_round(request: Request, session_id: str, round_no: Optional[int] = Form(None)):
-    gate = _admin_gate(request)
+    user, gate = _management_gate(request)
     if gate:
         return gate
 
-    sess = get_session(session_id)
+    sess = get_session_for_user(session_id, user)
     if int(sess["locked"]) != 1:
         raise HTTPException(400, "Please lock groups before opening rounds.")
     if stage_of_session(sess) != "closed":
@@ -1232,11 +1745,11 @@ def admin_open_round(request: Request, session_id: str, round_no: Optional[int] 
 
 @app.post("/admin/{session_id}/open_action_stage")
 def admin_open_action_stage(request: Request, session_id: str):
-    gate = _admin_gate(request)
+    user, gate = _management_gate(request)
     if gate:
         return gate
 
-    sess = get_session(session_id)
+    sess = get_session_for_user(session_id, user)
     if int(sess["locked"]) != 1:
         raise HTTPException(400, "Please lock groups before opening rounds.")
 
@@ -1257,11 +1770,11 @@ def admin_open_action_stage(request: Request, session_id: str):
 
 @app.post("/admin/{session_id}/close_and_compute")
 def admin_close_and_compute(request: Request, session_id: str):
-    gate = _admin_gate(request)
+    user, gate = _management_gate(request)
     if gate:
         return gate
 
-    sess = get_session(session_id)
+    sess = get_session_for_user(session_id, user)
     stage = stage_of_session(sess)
     round_no = int(sess["current_round"])
     rounds = int(sess["rounds"])
@@ -1282,11 +1795,11 @@ def admin_close_and_compute(request: Request, session_id: str):
 
 @app.get("/admin/{session_id}/export")
 def admin_export(request: Request, session_id: str):
-    gate = _admin_gate(request)
+    user, gate = _management_gate(request)
     if gate:
         return gate
 
-    sess = get_session(session_id)
+    sess = get_session_for_user(session_id, user)
     conn = db()
     students = conn.execute(
         """
@@ -1385,11 +1898,11 @@ def admin_export(request: Request, session_id: str):
 
 @app.get("/admin/{session_id}/whitelist/template")
 def admin_whitelist_template(request: Request, session_id: str):
-    gate = _admin_gate(request)
+    user, gate = _management_gate(request)
     if gate:
         return gate
 
-    _ = get_session(session_id)
+    _ = get_session_for_user(session_id, user)
     data = whitelist_template_csv()
     filename = f"whitelist_template_{session_id}.csv"
     return StreamingResponse(
@@ -1401,11 +1914,11 @@ def admin_whitelist_template(request: Request, session_id: str):
 
 @app.post("/admin/{session_id}/whitelist/upload")
 async def admin_whitelist_upload(request: Request, session_id: str, file: UploadFile = File(...)):
-    gate = _admin_gate(request)
+    user, gate = _management_gate(request)
     if gate:
         return gate
 
-    _ = get_session(session_id)
+    _ = get_session_for_user(session_id, user)
     content = await file.read()
     try:
         entries = parse_whitelist_csv(content)
@@ -1421,22 +1934,22 @@ async def admin_whitelist_upload(request: Request, session_id: str, file: Upload
 
 @app.post("/admin/{session_id}/whitelist/clear")
 def admin_whitelist_clear(request: Request, session_id: str):
-    gate = _admin_gate(request)
+    user, gate = _management_gate(request)
     if gate:
         return gate
 
-    _ = get_session(session_id)
+    _ = get_session_for_user(session_id, user)
     clear_whitelist(session_id)
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
 
 
 @app.post("/admin/{session_id}/delete")
 def admin_delete_session(request: Request, session_id: str):
-    gate = _admin_gate(request)
+    user, gate = _management_gate(request)
     if gate:
         return gate
 
-    _ = get_session(session_id)
+    _ = get_session_for_user(session_id, user)
     delete_session(session_id)
     return RedirectResponse(url="/admin", status_code=303)
 

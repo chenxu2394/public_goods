@@ -10,6 +10,32 @@
 {% block content %}
 
 <div class="card">
+  {% if is_admin %}
+    <div style="margin-bottom:8px;"><b>Session owner:</b> <span class="mono">{{ sess.owner_username or "admin" }}</span></div>
+    {% if transfer_error %}<div class="pill warn" style="margin-bottom:8px;">{{ transfer_error }}</div>{% endif %}
+    {% if transfer_success %}<div class="pill ok" style="margin-bottom:8px;">{{ transfer_success }}</div>{% endif %}
+    <form method="post" action="/admin/{{ sess.id }}/transfer" class="row" style="margin-bottom:12px;">
+      <div class="col">
+        <div class="muted">Transfer session to teacher</div>
+        <select name="teacher_user_id" required>
+          <option value="">Select a teacher</option>
+          {% for teacher in transfer_teachers %}
+            <option value="{{ teacher.id }}" {% if teacher.id == sess.owner_user_id %}selected{% endif %}>
+              {{ teacher.username }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col" style="align-self:flex-end;">
+        <button type="submit" {% if transfer_teachers|length == 0 %}disabled{% endif %}>Transfer Ownership</button>
+      </div>
+    </form>
+    {% if transfer_teachers|length == 0 %}
+      <div class="muted" style="margin-bottom:8px;">Create an active teacher account before transferring this session.</div>
+    {% else %}
+      <div class="muted" style="margin-bottom:8px;">Only active teacher accounts are available as transfer targets.</div>
+    {% endif %}
+  {% endif %}
   <div><b>Student join link:</b> <span class="mono">{{ join_url }}</span></div>
   <div class="muted">Share this link with students.</div>
   <div style="margin-top:12px;">
