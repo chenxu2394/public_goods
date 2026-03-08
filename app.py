@@ -1802,7 +1802,7 @@ def _get_teacher_or_404(user_id: str) -> sqlite3.Row:
     return user
 
 
-def _render_admin_panel(
+def _render_session_panel(
     request: Request,
     user: sqlite3.Row,
     sess: sqlite3.Row,
@@ -1836,7 +1836,7 @@ def _render_admin_panel(
         "transfer_teachers": list_teachers(active_only=True) if user["role"] == USER_ROLE_ADMIN else [],
     }
     context.update(extra)
-    return templates.TemplateResponse("admin_panel.html", context, status_code=status_code)
+    return templates.TemplateResponse("session_panel.html", context, status_code=status_code)
 
 
 @app.get("/admin/login", response_class=HTMLResponse)
@@ -2061,7 +2061,7 @@ def admin_panel(request: Request, session_id: str):
         return gate
 
     sess = get_session_for_user(session_id, user)
-    return _render_admin_panel(request, user, sess)
+    return _render_session_panel(request, user, sess)
 
 
 @app.post("/admin/{session_id}/title")
@@ -2074,7 +2074,7 @@ def admin_update_session_title(request: Request, session_id: str, title: str = F
     try:
         title = _validate_session_title(title)
     except HTTPException as exc:
-        return _render_admin_panel(request, user, sess, status_code=exc.status_code, title_error=exc.detail)
+        return _render_session_panel(request, user, sess, status_code=exc.status_code, title_error=exc.detail)
 
     set_session_title(session_id, title)
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
@@ -2089,7 +2089,7 @@ def admin_rotate_join_link(request: Request, session_id: str):
     _ = get_session_for_user(session_id, user)
     rotate_session_join_token(session_id)
     updated_sess = get_session(session_id)
-    return _render_admin_panel(
+    return _render_session_panel(
         request,
         user,
         updated_sess,
@@ -2107,9 +2107,9 @@ def admin_transfer_session(request: Request, session_id: str, teacher_user_id: s
     teacher_user_id = teacher_user_id.strip()
     teacher = get_user_by_id(teacher_user_id)
     if not teacher or teacher["role"] != USER_ROLE_TEACHER:
-        return _render_admin_panel(request, user, sess, status_code=400, transfer_error="Select a valid teacher.")
+        return _render_session_panel(request, user, sess, status_code=400, transfer_error="Select a valid teacher.")
     if teacher["disabled_at"] is not None:
-        return _render_admin_panel(
+        return _render_session_panel(
             request,
             user,
             sess,
@@ -2117,7 +2117,7 @@ def admin_transfer_session(request: Request, session_id: str, teacher_user_id: s
             transfer_error="You cannot transfer a session to a disabled teacher.",
         )
     if sess["owner_user_id"] == teacher["id"]:
-        return _render_admin_panel(
+        return _render_session_panel(
             request,
             user,
             sess,
@@ -2127,7 +2127,7 @@ def admin_transfer_session(request: Request, session_id: str, teacher_user_id: s
 
     transfer_session_owner(session_id, str(teacher["id"]))
     updated_sess = get_session(session_id)
-    return _render_admin_panel(
+    return _render_session_panel(
         request,
         user,
         updated_sess,
