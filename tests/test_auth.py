@@ -88,6 +88,236 @@ def _create_session(client: TestClient, title: str) -> str:
     return response.headers["location"].rsplit("/", 1)[-1]
 
 
+def _insert_sample_session_snapshot(
+    app_module,
+    session_id: str,
+    *,
+    owner_user_id: str,
+    title: str = "Snapshot Session",
+    teacher_removed_by_user_id: str | None = None,
+) -> None:
+    teacher_removed_at = "2026-03-08T12:45:00" if teacher_removed_by_user_id else None
+
+    conn = sqlite3.connect(app_module.DB_PATH)
+    conn.execute(
+        """
+        INSERT INTO sessions(
+            id, title, group_size, multiplier, endowment, rounds, created_at,
+            locked, current_round, round_open, action_open,
+            owner_user_id, teacher_removed_at, teacher_removed_by_user_id
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """,
+        (
+            session_id,
+            title,
+            5,
+            1.8,
+            12,
+            24,
+            "2026-03-08T09:00:00",
+            1,
+            12,
+            0,
+            1,
+            owner_user_id,
+            teacher_removed_at,
+            teacher_removed_by_user_id,
+        ),
+    )
+    conn.executemany(
+        """
+        INSERT INTO whitelist(session_id, student_id, name, added_at)
+        VALUES(?,?,?,?)
+    """,
+        [
+            (session_id, "20260001", "Alice", "2026-03-08T08:30:00"),
+            (session_id, "20260002", "Bob", "2026-03-08T08:31:00"),
+            (session_id, "20260003", "Cara", "2026-03-08T08:32:00"),
+        ],
+    )
+    conn.executemany(
+        """
+        INSERT INTO students(id, session_id, student_id, name, anonymous_id, joined_at, group_no, group_pos)
+        VALUES(?,?,?,?,?,?,?,?)
+    """,
+        [
+            ("stu-alpha", session_id, "20260001", "Alice", "A2", "2026-03-08T09:05:00", 1, 1),
+            ("stu-beta", session_id, "20260002", "Bob", "B3", "2026-03-08T09:06:00", 1, 2),
+            ("stu-gamma", session_id, "20260003", "Cara", "C4", "2026-03-08T09:07:00", 1, 3),
+        ],
+    )
+    conn.executemany(
+        """
+        INSERT INTO contributions(session_id, round_no, student_id, contrib, created_at)
+        VALUES(?,?,?,?,?)
+    """,
+        [
+            (session_id, 12, "stu-alpha", 4, "2026-03-08T09:20:00"),
+            (session_id, 12, "stu-beta", 5, "2026-03-08T09:21:00"),
+            (session_id, 12, "stu-gamma", 6, "2026-03-08T09:22:00"),
+        ],
+    )
+    conn.executemany(
+        """
+        INSERT INTO actions(session_id, round_no, actor_student_id, target_student_id, points, created_at)
+        VALUES(?,?,?,?,?,?)
+    """,
+        [
+            (session_id, 12, "stu-alpha", "stu-beta", 2, "2026-03-08T09:25:00"),
+            (session_id, 12, "stu-beta", "stu-gamma", 1, "2026-03-08T09:26:00"),
+        ],
+    )
+    conn.executemany(
+        """
+        INSERT INTO results(
+            session_id, round_no, student_id, group_no, group_n, group_total,
+            public_return, contrib, phase, phase_round, action_sent, action_received,
+            action_cost, action_effect, income, cumulative, computed_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """,
+        [
+            (session_id, 11, "stu-alpha", 1, 3, 12, 7.2, 3, "reward", 1, 1, 0, 1.0, 0.0, 16.2, 88.2, "2026-03-08T09:10:00"),
+            (session_id, 11, "stu-beta", 1, 3, 12, 7.2, 4, "reward", 1, 0, 1, 0.0, 2.0, 17.2, 90.2, "2026-03-08T09:10:00"),
+            (session_id, 11, "stu-gamma", 1, 3, 12, 7.2, 5, "reward", 1, 0, 0, 0.0, 0.0, 14.2, 84.2, "2026-03-08T09:10:00"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+
+def _fetch_session_snapshot(app_module, session_id: str):
+    conn = sqlite3.connect(app_module.DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    session_row = conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
+    assert session_row is not None
+
+    students = conn.execute(
+        """
+        SELECT id, student_id, name, anonymous_id, joined_at, group_no, group_pos
+        FROM students
+        WHERE session_id=?
+        ORDER BY joined_at ASC, id ASC
+    """,
+        (session_id,),
+    ).fetchall()
+    student_public_ids = {row["id"]: row["student_id"] for row in students}
+
+    contributions = conn.execute(
+        """
+        SELECT round_no, student_id, contrib, created_at
+        FROM contributions
+        WHERE session_id=?
+        ORDER BY id ASC
+    """,
+        (session_id,),
+    ).fetchall()
+    actions = conn.execute(
+        """
+        SELECT round_no, actor_student_id, target_student_id, points, created_at
+        FROM actions
+        WHERE session_id=?
+        ORDER BY id ASC
+    """,
+        (session_id,),
+    ).fetchall()
+    results = conn.execute(
+        """
+        SELECT round_no, student_id, group_no, group_n, group_total, public_return,
+               contrib, phase, phase_round, action_sent, action_received,
+               action_cost, action_effect, income, cumulative, computed_at
+        FROM results
+        WHERE session_id=?
+        ORDER BY id ASC
+    """,
+        (session_id,),
+    ).fetchall()
+
+    snapshot = {
+        "session": {
+            "title": session_row["title"],
+            "group_size": session_row["group_size"],
+            "multiplier": session_row["multiplier"],
+            "endowment": session_row["endowment"],
+            "rounds": session_row["rounds"],
+            "locked": session_row["locked"],
+            "current_round": session_row["current_round"],
+            "round_open": session_row["round_open"],
+            "action_open": session_row["action_open"],
+            "created_at": session_row["created_at"],
+            "owner_user_id": session_row["owner_user_id"],
+            "teacher_removed_at": session_row["teacher_removed_at"],
+            "teacher_removed_by_user_id": session_row["teacher_removed_by_user_id"],
+        },
+        "whitelist": [
+            (row["student_id"], row["name"], row["added_at"])
+            for row in conn.execute(
+                """
+                SELECT student_id, name, added_at
+                FROM whitelist
+                WHERE session_id=?
+                ORDER BY id ASC
+            """,
+                (session_id,),
+            ).fetchall()
+        ],
+        "students": [
+            (
+                row["student_id"],
+                row["name"],
+                row["anonymous_id"],
+                row["joined_at"],
+                row["group_no"],
+                row["group_pos"],
+            )
+            for row in students
+        ],
+        "contributions": [
+            (row["round_no"], student_public_ids[row["student_id"]], row["contrib"], row["created_at"])
+            for row in contributions
+        ],
+        "actions": [
+            (
+                row["round_no"],
+                student_public_ids[row["actor_student_id"]],
+                student_public_ids[row["target_student_id"]],
+                row["points"],
+                row["created_at"],
+            )
+            for row in actions
+        ],
+        "results": [
+            (
+                row["round_no"],
+                student_public_ids[row["student_id"]],
+                row["group_no"],
+                row["group_n"],
+                row["group_total"],
+                row["public_return"],
+                row["contrib"],
+                row["phase"],
+                row["phase_round"],
+                row["action_sent"],
+                row["action_received"],
+                row["action_cost"],
+                row["action_effect"],
+                row["income"],
+                row["cumulative"],
+                row["computed_at"],
+            )
+            for row in results
+        ],
+        "internal_student_ids": set(student_public_ids.keys()),
+        "contribution_refs": {row["student_id"] for row in contributions},
+        "action_refs": {row["actor_student_id"] for row in actions} | {row["target_student_id"] for row in actions},
+        "result_refs": {row["student_id"] for row in results},
+    }
+    conn.close()
+    return snapshot
+
+
 def _seed_legacy_admin_db(db_path: Path, secret_key: str) -> None:
     conn = sqlite3.connect(db_path)
     conn.execute("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -501,3 +731,262 @@ def test_transfer_clears_teacher_archive_metadata(monkeypatch, tmp_path: Path):
         home = client.get("/admin")
         assert home.status_code == 200
         assert "Recoverable Session" in home.text
+
+
+def test_admin_can_duplicate_full_session_snapshot_as_admin(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        admin = app_module.get_user_by_username("admin")
+        assert admin is not None
+
+        source_session_id = "snapshot-source"
+        _insert_sample_session_snapshot(
+            app_module,
+            source_session_id,
+            owner_user_id=admin["id"],
+            title="Snapshot Session",
+        )
+        source_snapshot = _fetch_session_snapshot(app_module, source_session_id)
+
+        response = client.post(f"/admin/{source_session_id}/duplicate", follow_redirects=False)
+        assert response.status_code == 303
+
+        duplicate_session_id = response.headers["location"].rsplit("/", 1)[-1]
+        assert duplicate_session_id != source_session_id
+
+        duplicate_snapshot = _fetch_session_snapshot(app_module, duplicate_session_id)
+
+        panel = client.get(response.headers["location"])
+        assert panel.status_code == 200
+        assert "Snapshot Session (Copy)" in panel.text
+
+        assert duplicate_snapshot["session"]["title"] == "Snapshot Session (Copy)"
+        assert duplicate_snapshot["session"]["owner_user_id"] == admin["id"]
+        assert duplicate_snapshot["session"]["teacher_removed_at"] is None
+        assert duplicate_snapshot["session"]["teacher_removed_by_user_id"] is None
+        assert duplicate_snapshot["session"]["created_at"] != source_snapshot["session"]["created_at"]
+
+        for field in (
+            "group_size",
+            "multiplier",
+            "endowment",
+            "rounds",
+            "locked",
+            "current_round",
+            "round_open",
+            "action_open",
+        ):
+            assert duplicate_snapshot["session"][field] == source_snapshot["session"][field]
+
+        for section in ("whitelist", "students", "contributions", "actions", "results"):
+            assert duplicate_snapshot[section] == source_snapshot[section]
+
+        assert duplicate_snapshot["internal_student_ids"].isdisjoint(source_snapshot["internal_student_ids"])
+        assert duplicate_snapshot["contribution_refs"] <= duplicate_snapshot["internal_student_ids"]
+        assert duplicate_snapshot["action_refs"] <= duplicate_snapshot["internal_student_ids"]
+        assert duplicate_snapshot["result_refs"] <= duplicate_snapshot["internal_student_ids"]
+        assert duplicate_snapshot["contribution_refs"].isdisjoint(source_snapshot["internal_student_ids"])
+        assert duplicate_snapshot["action_refs"].isdisjoint(source_snapshot["internal_student_ids"])
+        assert duplicate_snapshot["result_refs"].isdisjoint(source_snapshot["internal_student_ids"])
+
+
+def test_admin_duplicate_of_teacher_session_creates_admin_owned_copy(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        _create_teacher(client, "Teacher1")
+        admin = app_module.get_user_by_username("admin")
+        teacher = app_module.get_user_by_username("Teacher1")
+        assert admin is not None
+        assert teacher is not None
+
+        source_session_id = "teacher-owned-source"
+        _insert_sample_session_snapshot(
+            app_module,
+            source_session_id,
+            owner_user_id=teacher["id"],
+            title="Teacher Owned Session",
+        )
+
+        response = client.post(f"/admin/{source_session_id}/duplicate", follow_redirects=False)
+        assert response.status_code == 303
+
+        duplicate_session_id = response.headers["location"].rsplit("/", 1)[-1]
+        source_session = app_module.get_session(source_session_id)
+        duplicate_session = app_module.get_session(duplicate_session_id)
+
+        assert source_session["owner_user_id"] == teacher["id"]
+        assert duplicate_session["owner_user_id"] == admin["id"]
+        assert duplicate_session["owner_username"] == "admin"
+        assert duplicate_session["title"] == "Teacher Owned Session (Copy)"
+
+
+def test_admin_duplicate_of_archived_session_clears_archive_metadata(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        _create_teacher(client, "Teacher1")
+        admin = app_module.get_user_by_username("admin")
+        teacher = app_module.get_user_by_username("Teacher1")
+        assert admin is not None
+        assert teacher is not None
+
+        source_session_id = "archived-source"
+        _insert_sample_session_snapshot(
+            app_module,
+            source_session_id,
+            owner_user_id=admin["id"],
+            title="Archived Session",
+            teacher_removed_by_user_id=teacher["id"],
+        )
+
+        response = client.post(f"/admin/{source_session_id}/duplicate", follow_redirects=False)
+        assert response.status_code == 303
+
+        duplicate_session_id = response.headers["location"].rsplit("/", 1)[-1]
+        duplicate_session = app_module.get_session(duplicate_session_id)
+
+        assert duplicate_session["owner_user_id"] == admin["id"]
+        assert duplicate_session["teacher_removed_at"] is None
+        assert duplicate_session["teacher_removed_by_user_id"] is None
+        assert duplicate_session["teacher_removed_by_username"] is None
+
+
+def test_teacher_cannot_duplicate_session(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher_temp = _create_teacher(client, "Teacher1")
+        teacher = app_module.get_user_by_username("Teacher1")
+        assert teacher is not None
+
+        source_session_id = "teacher-duplicate-forbidden"
+        _insert_sample_session_snapshot(
+            app_module,
+            source_session_id,
+            owner_user_id=teacher["id"],
+            title="Teacher Session",
+        )
+
+        assert _login(client, "Teacher1", teacher_temp).status_code == 303
+        assert _change_password(client, teacher_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+
+        response = client.post(f"/admin/{source_session_id}/duplicate", follow_redirects=False)
+        assert response.status_code == 404
+
+
+def test_admin_can_duplicate_setup_as_fresh_admin_owned_session(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        _create_teacher(client, "Teacher1")
+        admin = app_module.get_user_by_username("admin")
+        teacher = app_module.get_user_by_username("Teacher1")
+        assert admin is not None
+        assert teacher is not None
+
+        source_session_id = "setup-source"
+        _insert_sample_session_snapshot(
+            app_module,
+            source_session_id,
+            owner_user_id=teacher["id"],
+            title="Reusable Session",
+            teacher_removed_by_user_id=teacher["id"],
+        )
+        source_snapshot = _fetch_session_snapshot(app_module, source_session_id)
+
+        response = client.post(f"/admin/{source_session_id}/duplicate_setup", follow_redirects=False)
+        assert response.status_code == 303
+
+        duplicate_session_id = response.headers["location"].rsplit("/", 1)[-1]
+        duplicate_snapshot = _fetch_session_snapshot(app_module, duplicate_session_id)
+
+        panel = client.get(response.headers["location"])
+        assert panel.status_code == 200
+        assert "Reusable Session (Setup Copy)" in panel.text
+
+        assert duplicate_snapshot["session"]["title"] == "Reusable Session (Setup Copy)"
+        assert duplicate_snapshot["session"]["owner_user_id"] == admin["id"]
+        assert duplicate_snapshot["session"]["teacher_removed_at"] is None
+        assert duplicate_snapshot["session"]["teacher_removed_by_user_id"] is None
+        assert duplicate_snapshot["session"]["created_at"] != source_snapshot["session"]["created_at"]
+
+        for field in ("group_size", "multiplier", "endowment", "rounds"):
+            assert duplicate_snapshot["session"][field] == source_snapshot["session"][field]
+
+        assert duplicate_snapshot["session"]["locked"] == 0
+        assert duplicate_snapshot["session"]["current_round"] == 1
+        assert duplicate_snapshot["session"]["round_open"] == 0
+        assert duplicate_snapshot["session"]["action_open"] == 0
+
+        assert duplicate_snapshot["whitelist"] == source_snapshot["whitelist"]
+        assert duplicate_snapshot["students"] == []
+        assert duplicate_snapshot["contributions"] == []
+        assert duplicate_snapshot["actions"] == []
+        assert duplicate_snapshot["results"] == []
+        assert duplicate_snapshot["internal_student_ids"] == set()
+        assert duplicate_snapshot["contribution_refs"] == set()
+        assert duplicate_snapshot["action_refs"] == set()
+        assert duplicate_snapshot["result_refs"] == set()
+
+
+def test_teacher_cannot_duplicate_setup_session(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher_temp = _create_teacher(client, "Teacher1")
+        teacher = app_module.get_user_by_username("Teacher1")
+        assert teacher is not None
+
+        source_session_id = "teacher-setup-forbidden"
+        _insert_sample_session_snapshot(
+            app_module,
+            source_session_id,
+            owner_user_id=teacher["id"],
+            title="Teacher Setup Session",
+        )
+
+        assert _login(client, "Teacher1", teacher_temp).status_code == 303
+        assert _change_password(client, teacher_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+
+        response = client.post(f"/admin/{source_session_id}/duplicate_setup", follow_redirects=False)
+        assert response.status_code == 404

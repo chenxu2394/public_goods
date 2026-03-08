@@ -38,6 +38,14 @@
     {% else %}
       <div class="muted" style="margin-bottom:8px;">Only active teacher accounts are available as transfer targets.</div>
     {% endif %}
+    <form method="post" action="/admin/{{ sess.id }}/duplicate" style="margin-bottom:12px;">
+      <button type="submit">Duplicate Session</button>
+    </form>
+    <div class="muted" style="margin-bottom:8px;">Creates a full snapshot owned by admin so you can review it or transfer it later.</div>
+    <form method="post" action="/admin/{{ sess.id }}/duplicate_setup" style="margin-bottom:12px;">
+      <button type="submit">Duplicate Setup</button>
+    </form>
+    <div class="muted" style="margin-bottom:8px;">Copies only the session settings and whitelist, then resets the duplicate to a fresh admin-owned session.</div>
   {% endif %}
   <div><b>Student join link:</b> <span class="mono">{{ join_url }}</span></div>
   <div class="muted">Share this link with students.</div>
