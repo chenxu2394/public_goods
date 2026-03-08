@@ -990,3 +990,129 @@ def test_teacher_cannot_duplicate_setup_session(monkeypatch, tmp_path: Path):
 
         response = client.post(f"/admin/{source_session_id}/duplicate_setup", follow_redirects=False)
         assert response.status_code == 404
+
+
+def test_teacher_can_rename_own_session(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher_temp = _create_teacher(client, "Teacher1")
+
+        assert _login(client, "Teacher1", teacher_temp).status_code == 303
+        assert _change_password(client, teacher_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+
+        session_id = _create_session(client, "Original Teacher Title")
+        response = client.post(
+            f"/admin/{session_id}/title",
+            data={"title": "Renamed Teacher Session"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == f"/admin/{session_id}"
+
+        session_row = app_module.get_session(session_id)
+        assert session_row["title"] == "Renamed Teacher Session"
+
+        panel = client.get(f"/admin/{session_id}")
+        assert panel.status_code == 200
+        assert "Renamed Teacher Session" in panel.text
+        assert "Original Teacher Title" not in panel.text
+
+
+def test_admin_can_rename_teacher_owned_session(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher_temp = _create_teacher(client, "Teacher1")
+
+        assert _login(client, "Teacher1", teacher_temp).status_code == 303
+        assert _change_password(client, teacher_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+        session_id = _create_session(client, "Teacher Owned Title")
+
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        response = client.post(
+            f"/admin/{session_id}/title",
+            data={"title": "Admin Renamed Title"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == f"/admin/{session_id}"
+
+        session_row = app_module.get_session(session_id)
+        assert session_row["title"] == "Admin Renamed Title"
+
+        home = client.get("/admin")
+        assert home.status_code == 200
+        assert "Admin Renamed Title" in home.text
+        assert "Teacher Owned Title" not in home.text
+
+
+def test_teacher_cannot_rename_other_users_session(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher1_temp = _create_teacher(client, "Teacher1")
+        teacher2_temp = _create_teacher(client, "Teacher2")
+
+        assert _login(client, "Teacher1", teacher1_temp).status_code == 303
+        assert _change_password(client, teacher1_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+        session_id = _create_session(client, "Teacher1 Session")
+
+        assert _login(client, "Teacher2", teacher2_temp).status_code == 303
+        assert _change_password(client, teacher2_temp, "Teacher2-final-pass").status_code == 303
+        assert _login(client, "Teacher2", "Teacher2-final-pass").status_code == 303
+
+        response = client.post(
+            f"/admin/{session_id}/title",
+            data={"title": "Teacher2 Rename Attempt"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 404
+
+        session_row = app_module.get_session(session_id)
+        assert session_row["title"] == "Teacher1 Session"
+
+
+def test_empty_session_title_is_rejected_on_rename(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        session_id = _create_session(client, "Valid Title")
+
+        response = client.post(
+            f"/admin/{session_id}/title",
+            data={"title": "   "},
+            follow_redirects=False,
+        )
+        assert response.status_code == 400
+        assert "Session title must not be empty." in response.text
+
+        session_row = app_module.get_session(session_id)
+        assert session_row["title"] == "Valid Title"

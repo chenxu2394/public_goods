@@ -142,6 +142,15 @@ def _validate_username(username: str) -> str:
     return value
 
 
+def _validate_session_title(title: str) -> str:
+    value = title.strip()
+    if not value:
+        raise HTTPException(400, "Session title must not be empty.")
+    if len(value) > 200:
+        raise HTTPException(400, "Session title must be at most 200 characters.")
+    return value
+
+
 def _generate_password_salt() -> str:
     return _b64url(secrets.token_bytes(16))
 
@@ -722,6 +731,15 @@ def archive_session_to_admin(session_id: str, removed_by_user_id: str) -> None:
         """,
             (str(admin_user["id"]), now_iso(), removed_by_user_id, session_id),
         )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_session_title(session_id: str, title: str) -> None:
+    conn = db()
+    try:
+        conn.execute("UPDATE sessions SET title=? WHERE id=?", (title, session_id))
         conn.commit()
     finally:
         conn.close()
@@ -1932,6 +1950,7 @@ def admin_create_session(
     if gate:
         return gate
 
+    title = _validate_session_title(title)
     if group_size < MIN_GROUP_SIZE or group_size > MAX_GROUP_SIZE:
         raise HTTPException(400, f"group_size must be {MIN_GROUP_SIZE}..{MAX_GROUP_SIZE}")
     if multiplier <= 0 or multiplier > 10:
@@ -1979,6 +1998,22 @@ def admin_panel(request: Request, session_id: str):
 
     sess = get_session_for_user(session_id, user)
     return _render_admin_panel(request, user, sess)
+
+
+@app.post("/admin/{session_id}/title")
+def admin_update_session_title(request: Request, session_id: str, title: str = Form(...)):
+    user, gate = _management_gate(request)
+    if gate:
+        return gate
+
+    sess = get_session_for_user(session_id, user)
+    try:
+        title = _validate_session_title(title)
+    except HTTPException as exc:
+        return _render_admin_panel(request, user, sess, status_code=exc.status_code, title_error=exc.detail)
+
+    set_session_title(session_id, title)
+    return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
 
 
 @app.post("/admin/{session_id}/transfer")

@@ -10,6 +10,22 @@
 {% block content %}
 
 <div class="card">
+  {% if title_error %}<div class="pill warn" style="margin-bottom:8px;">{{ title_error }}</div>{% endif %}
+  <form method="post" action="/admin/{{ sess.id }}/title" class="row" style="margin-bottom:12px;">
+    <div class="col">
+      <div class="muted">Session title</div>
+      <input
+        name="title"
+        value="{{ sess.title }}"
+        maxlength="200"
+        required
+        placeholder="Example: MPA Week 3 Public Goods Experiment"
+      />
+    </div>
+    <div class="col" style="align-self:flex-end;">
+      <button type="submit">Save Title</button>
+    </div>
+  </form>
   {% if is_admin %}
     <div style="margin-bottom:8px;"><b>Session owner:</b> <span class="mono">{{ sess.owner_username or "admin" }}</span></div>
     {% if sess.teacher_removed_at %}
