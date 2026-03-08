@@ -11,6 +11,7 @@
 
 <div class="card">
   {% if title_error %}<div class="pill warn" style="margin-bottom:8px;">{{ title_error }}</div>{% endif %}
+  {% if join_link_success %}<div class="pill ok" style="margin-bottom:8px;">{{ join_link_success }}</div>{% endif %}
   <form method="post" action="/admin/{{ sess.id }}/title" class="row" style="margin-bottom:12px;">
     <div class="col">
       <div class="muted">Session title</div>
@@ -73,6 +74,15 @@
     />
     <div class="muted" style="margin-top:8px;">Students can scan this QR code to open the join page on their phones.</div>
   </div>
+  <form method="post" action="/admin/{{ sess.id }}/rotate_join_link" style="margin-top:12px;">
+    <button
+      type="submit"
+      onclick="return confirm('Refresh the student join link and QR code? The previous join link will stop working immediately for new joins.');"
+    >
+      Refresh Join Link
+    </button>
+  </form>
+  <div class="muted" style="margin-top:8px;">Use this when you need a new student join link without changing the session itself.</div>
   <div style="margin-top:8px;"><b>Classroom display:</b> <a href="{{ display_url }}" target="_blank">Open projection page</a></div>
   <div style="margin-top:8px;"><b>Export data:</b> <a href="{{ export_url }}">Download CSV (long format by round)</a></div>
 </div>

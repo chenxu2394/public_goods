@@ -319,6 +319,16 @@ def _backfill_session_owners(conn: sqlite3.Connection, admin_user_id: str) -> No
     )
 
 
+def _backfill_session_join_tokens(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        UPDATE sessions
+        SET join_token=id
+        WHERE join_token IS NULL OR TRIM(join_token)=''
+    """
+    )
+
+
 def _get_admin_user_conn(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
     return conn.execute(
         "SELECT * FROM users WHERE username_norm=?",
@@ -445,7 +455,8 @@ def init_db():
         locked INTEGER NOT NULL DEFAULT 0,
         current_round INTEGER NOT NULL DEFAULT 1,
         round_open INTEGER NOT NULL DEFAULT 0,
-        action_open INTEGER NOT NULL DEFAULT 0
+        action_open INTEGER NOT NULL DEFAULT 0,
+        join_token TEXT
     )
     """
     )
@@ -547,6 +558,7 @@ def init_db():
     _migrate_student_identifier_columns(conn)
 
     _ensure_column(conn, "sessions", "action_open", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "sessions", "join_token", "TEXT")
     _ensure_column(conn, "sessions", "owner_user_id", "TEXT")
     _ensure_column(conn, "sessions", "teacher_removed_at", "TEXT")
     _ensure_column(conn, "sessions", "teacher_removed_by_user_id", "TEXT")
@@ -564,6 +576,8 @@ def init_db():
     if admin_user is not None:
         _backfill_session_owners(conn, admin_user["id"])
 
+    _backfill_session_join_tokens(conn)
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_join_token ON sessions(join_token)")
     _backfill_anonymous_ids(conn)
 
     conn.commit()
@@ -736,6 +750,26 @@ def archive_session_to_admin(session_id: str, removed_by_user_id: str) -> None:
         conn.close()
 
 
+def rotate_session_join_token(session_id: str) -> str:
+    conn = db()
+    try:
+        sess = conn.execute("SELECT join_token FROM sessions WHERE id=?", (session_id,)).fetchone()
+        if not sess:
+            raise HTTPException(404, "Session not found")
+        new_join_token = _generate_unique_token_conn(
+            conn,
+            "sessions",
+            "join_token",
+            nbytes=6,
+            reserved={str(sess["join_token"] or ""), str(session_id)},
+        )
+        conn.execute("UPDATE sessions SET join_token=? WHERE id=?", (new_join_token, session_id))
+        conn.commit()
+        return new_join_token
+    finally:
+        conn.close()
+
+
 def set_session_title(session_id: str, title: str) -> None:
     conn = db()
     try:
@@ -769,15 +803,22 @@ def _insert_admin_owned_session_copy_conn(
     action_open: int,
 ) -> str:
     new_session_id = _generate_unique_token_conn(conn, "sessions", "id", nbytes=6)
+    join_token = _generate_unique_token_conn(
+        conn,
+        "sessions",
+        "join_token",
+        nbytes=6,
+        reserved={new_session_id, str(sess["id"])},
+    )
     created_at = now_iso()
     conn.execute(
         """
         INSERT INTO sessions(
             id, title, group_size, multiplier, endowment, rounds, created_at,
-            locked, current_round, round_open, action_open,
+            locked, current_round, round_open, action_open, join_token,
             owner_user_id, teacher_removed_at, teacher_removed_by_user_id
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """,
         (
             new_session_id,
@@ -791,6 +832,7 @@ def _insert_admin_owned_session_copy_conn(
             int(current_round),
             int(round_open),
             int(action_open),
+            join_token,
             admin_user_id,
             None,
             None,
@@ -1159,6 +1201,26 @@ def get_session(session_id: str) -> sqlite3.Row:
     conn.close()
     if not row:
         raise HTTPException(404, "Session not found")
+    return row
+
+
+def get_session_by_join_token(join_token: str) -> sqlite3.Row:
+    conn = db()
+    row = conn.execute(
+        """
+        SELECT s.*,
+               owner.username AS owner_username,
+               removed_by.username AS teacher_removed_by_username
+        FROM sessions s
+        LEFT JOIN users owner ON owner.id=s.owner_user_id
+        LEFT JOIN users removed_by ON removed_by.id=s.teacher_removed_by_user_id
+        WHERE s.join_token=?
+    """,
+        (join_token,),
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(404, "Join link is invalid or expired.")
     return row
 
 
@@ -1751,7 +1813,7 @@ def _render_admin_panel(
     students = list_students(str(sess["id"]))
     counts = session_counts(str(sess["id"]))
 
-    join_url = f"{PUBLIC_BASE_URL}/join/{sess['id']}"
+    join_url = f"{PUBLIC_BASE_URL}/join/{sess['join_token']}"
     join_qr_data_uri = qr_svg_data_uri(join_url)
     export_url = f"{PUBLIC_BASE_URL}/admin/{sess['id']}/export"
     template_url = f"{PUBLIC_BASE_URL}/admin/{sess['id']}/whitelist/template"
@@ -1962,13 +2024,14 @@ def admin_create_session(
 
     session_id = secrets.token_urlsafe(6)
     conn = db()
+    join_token = _generate_unique_token_conn(conn, "sessions", "join_token", nbytes=6, reserved={session_id})
     conn.execute(
         """
         INSERT INTO sessions(
             id, title, group_size, multiplier, endowment, rounds, created_at,
-            locked, current_round, round_open, action_open, owner_user_id
+            locked, current_round, round_open, action_open, join_token, owner_user_id
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
     """,
         (
             session_id,
@@ -1982,6 +2045,7 @@ def admin_create_session(
             1,
             0,
             0,
+            join_token,
             str(user["id"]),
         ),
     )
@@ -2014,6 +2078,23 @@ def admin_update_session_title(request: Request, session_id: str, title: str = F
 
     set_session_title(session_id, title)
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
+
+
+@app.post("/admin/{session_id}/rotate_join_link")
+def admin_rotate_join_link(request: Request, session_id: str):
+    user, gate = _management_gate(request)
+    if gate:
+        return gate
+
+    _ = get_session_for_user(session_id, user)
+    rotate_session_join_token(session_id)
+    updated_sess = get_session(session_id)
+    return _render_admin_panel(
+        request,
+        user,
+        updated_sess,
+        join_link_success="Student join link refreshed. The previous join link no longer accepts new joins.",
+    )
 
 
 @app.post("/admin/{session_id}/transfer")
@@ -2365,16 +2446,21 @@ def admin_delete_session(request: Request, session_id: str):
 
 # ---------------- Student ----------------
 
-@app.get("/join/{session_id}", response_class=HTMLResponse)
-def join_page(request: Request, session_id: str):
-    sess = get_session(session_id)
+@app.get("/join/{join_token}", response_class=HTMLResponse)
+def join_page(request: Request, join_token: str):
+    sess = get_session_by_join_token(join_token)
+    session_id = str(sess["id"])
     counts = session_counts(session_id)
-    return templates.TemplateResponse("join.html", {"request": request, "sess": sess, "counts": counts})
+    return templates.TemplateResponse(
+        "join.html",
+        {"request": request, "sess": sess, "counts": counts, "join_token": join_token},
+    )
 
 
-@app.post("/join/{session_id}")
-def join_submit(session_id: str, student_id: str = Form(...), name: str = Form(...)):
-    sess = get_session(session_id)
+@app.post("/join/{join_token}")
+def join_submit(join_token: str, student_id: str = Form(...), name: str = Form(...)):
+    sess = get_session_by_join_token(join_token)
+    session_id = str(sess["id"])
     student_id = student_id.strip()
     name = name.strip()
     if not student_id or not name:

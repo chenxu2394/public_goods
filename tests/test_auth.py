@@ -103,10 +103,10 @@ def _insert_sample_session_snapshot(
         """
         INSERT INTO sessions(
             id, title, group_size, multiplier, endowment, rounds, created_at,
-            locked, current_round, round_open, action_open,
+            locked, current_round, round_open, action_open, join_token,
             owner_user_id, teacher_removed_at, teacher_removed_by_user_id
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """,
         (
             session_id,
@@ -120,6 +120,7 @@ def _insert_sample_session_snapshot(
             12,
             0,
             1,
+            f"join-{session_id}",
             owner_user_id,
             teacher_removed_at,
             teacher_removed_by_user_id,
@@ -415,17 +416,22 @@ def test_existing_sessions_are_backfilled_to_admin_owner(monkeypatch, tmp_path: 
         seed_db=_seed_legacy_session_db,
     )
 
-    with TestClient(app_module.app):
+    with TestClient(app_module.app) as client:
         admin = app_module.get_user_by_username("admin")
         assert admin is not None
 
+        join_page = client.get("/join/sess123")
+        assert join_page.status_code == 200
+        assert 'action="/join/sess123"' in join_page.text
+
     conn = sqlite3.connect(db_path)
-    owner_user_id = conn.execute(
-        "SELECT owner_user_id FROM sessions WHERE id='sess123'"
-    ).fetchone()[0]
+    owner_user_id, join_token = conn.execute(
+        "SELECT owner_user_id, join_token FROM sessions WHERE id='sess123'"
+    ).fetchone()
     conn.close()
 
     assert owner_user_id == admin["id"]
+    assert join_token == "sess123"
 
 
 def test_teacher_must_change_password_and_cannot_access_other_teacher_session(monkeypatch, tmp_path: Path):
@@ -772,6 +778,7 @@ def test_admin_can_duplicate_full_session_snapshot_as_admin(monkeypatch, tmp_pat
         assert duplicate_snapshot["session"]["teacher_removed_at"] is None
         assert duplicate_snapshot["session"]["teacher_removed_by_user_id"] is None
         assert duplicate_snapshot["session"]["created_at"] != source_snapshot["session"]["created_at"]
+        assert app_module.get_session(duplicate_session_id)["join_token"] != app_module.get_session(source_session_id)["join_token"]
 
         for field in (
             "group_size",
@@ -942,6 +949,7 @@ def test_admin_can_duplicate_setup_as_fresh_admin_owned_session(monkeypatch, tmp
         assert duplicate_snapshot["session"]["teacher_removed_at"] is None
         assert duplicate_snapshot["session"]["teacher_removed_by_user_id"] is None
         assert duplicate_snapshot["session"]["created_at"] != source_snapshot["session"]["created_at"]
+        assert app_module.get_session(duplicate_session_id)["join_token"] != app_module.get_session(source_session_id)["join_token"]
 
         for field in ("group_size", "multiplier", "endowment", "rounds"):
             assert duplicate_snapshot["session"][field] == source_snapshot["session"][field]
@@ -990,6 +998,131 @@ def test_teacher_cannot_duplicate_setup_session(monkeypatch, tmp_path: Path):
 
         response = client.post(f"/admin/{source_session_id}/duplicate_setup", follow_redirects=False)
         assert response.status_code == 404
+
+
+def test_teacher_can_rotate_join_link_and_old_link_expires(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher_temp = _create_teacher(client, "Teacher1")
+
+        assert _login(client, "Teacher1", teacher_temp).status_code == 303
+        assert _change_password(client, teacher_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+
+        session_id = _create_session(client, "Rotating Join Link Session")
+        app_module.upsert_whitelist(session_id, [("20260001", "Alice")])
+
+        old_join_token = app_module.get_session(session_id)["join_token"]
+        assert old_join_token
+        assert old_join_token != session_id
+
+        old_join_page = client.get(f"/join/{old_join_token}")
+        assert old_join_page.status_code == 200
+        assert f'action="/join/{old_join_token}"' in old_join_page.text
+
+        first_join = client.post(
+            f"/join/{old_join_token}",
+            data={"student_id": "20260001", "name": "Alice"},
+            follow_redirects=False,
+        )
+        assert first_join.status_code == 303
+        assert first_join.headers["location"] == f"/s/{session_id}/20260001"
+
+        rotate_response = client.post(f"/admin/{session_id}/rotate_join_link", follow_redirects=False)
+        assert rotate_response.status_code == 200
+        assert "Student join link refreshed." in rotate_response.text
+
+        new_join_token = app_module.get_session(session_id)["join_token"]
+        assert new_join_token != old_join_token
+        assert f"/join/{new_join_token}" in rotate_response.text
+
+        stale_get = client.get(f"/join/{old_join_token}", follow_redirects=False)
+        assert stale_get.status_code == 404
+
+        stale_post = client.post(
+            f"/join/{old_join_token}",
+            data={"student_id": "20260001", "name": "Alice"},
+            follow_redirects=False,
+        )
+        assert stale_post.status_code == 404
+
+        fresh_get = client.get(f"/join/{new_join_token}")
+        assert fresh_get.status_code == 200
+        assert f'action="/join/{new_join_token}"' in fresh_get.text
+
+        fresh_post = client.post(
+            f"/join/{new_join_token}",
+            data={"student_id": "20260001", "name": "Alice"},
+            follow_redirects=False,
+        )
+        assert fresh_post.status_code == 303
+        assert fresh_post.headers["location"] == f"/s/{session_id}/20260001"
+
+        student_page = client.get(f"/s/{session_id}/20260001")
+        assert student_page.status_code == 200
+
+
+def test_admin_can_rotate_teacher_owned_session_join_link(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher_temp = _create_teacher(client, "Teacher1")
+
+        assert _login(client, "Teacher1", teacher_temp).status_code == 303
+        assert _change_password(client, teacher_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+        session_id = _create_session(client, "Teacher Owned Join Link")
+
+        old_join_token = app_module.get_session(session_id)["join_token"]
+
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        response = client.post(f"/admin/{session_id}/rotate_join_link", follow_redirects=False)
+        assert response.status_code == 200
+        assert "Student join link refreshed." in response.text
+
+        new_join_token = app_module.get_session(session_id)["join_token"]
+        assert new_join_token != old_join_token
+
+
+def test_teacher_cannot_rotate_other_users_join_link(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher1_temp = _create_teacher(client, "Teacher1")
+        teacher2_temp = _create_teacher(client, "Teacher2")
+
+        assert _login(client, "Teacher1", teacher1_temp).status_code == 303
+        assert _change_password(client, teacher1_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+        session_id = _create_session(client, "Teacher1 Join Link")
+        old_join_token = app_module.get_session(session_id)["join_token"]
+
+        assert _login(client, "Teacher2", teacher2_temp).status_code == 303
+        assert _change_password(client, teacher2_temp, "Teacher2-final-pass").status_code == 303
+        assert _login(client, "Teacher2", "Teacher2-final-pass").status_code == 303
+
+        response = client.post(f"/admin/{session_id}/rotate_join_link", follow_redirects=False)
+        assert response.status_code == 404
+        assert app_module.get_session(session_id)["join_token"] == old_join_token
 
 
 def test_teacher_can_rename_own_session(monkeypatch, tmp_path: Path):
