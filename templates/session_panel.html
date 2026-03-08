@@ -9,6 +9,41 @@
 {% endblock %}
 {% block content %}
 
+<script>
+  (function() {
+    var storageKey = "session-panel-scroll:" + window.location.pathname;
+    try {
+      var savedScroll = sessionStorage.getItem(storageKey);
+      if (savedScroll !== null) {
+        sessionStorage.removeItem(storageKey);
+        var scrollY = parseInt(savedScroll, 10);
+        if (!Number.isNaN(scrollY)) {
+          window.requestAnimationFrame(function() {
+            window.scrollTo(0, scrollY);
+          });
+        }
+      }
+    } catch (err) {}
+
+    document.addEventListener("submit", function(event) {
+      var form = event.target;
+      if (!(form instanceof HTMLFormElement)) {
+        return;
+      }
+      var action = form.getAttribute("action") || "";
+      if (!action.startsWith("/admin/{{ sess.id }}/")) {
+        return;
+      }
+      if (action.endsWith("/duplicate") || action.endsWith("/duplicate_setup") || action.endsWith("/delete")) {
+        return;
+      }
+      try {
+        sessionStorage.setItem(storageKey, String(window.scrollY || window.pageYOffset || 0));
+      } catch (err) {}
+    }, true);
+  })();
+</script>
+
 <div class="card">
   {% if title_error %}<div class="pill warn" style="margin-bottom:8px;">{{ title_error }}</div>{% endif %}
   {% if join_link_success %}<div class="pill ok" style="margin-bottom:8px;">{{ join_link_success }}</div>{% endif %}
