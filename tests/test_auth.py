@@ -88,6 +88,77 @@ def _create_session(client: TestClient, title: str) -> str:
     return response.headers["location"].rsplit("/", 1)[-1]
 
 
+def _setup_grouped_session(client: TestClient, app_module, title: str = "Experiment Session") -> tuple[str, list[tuple[str, str]]]:
+    session_id = _create_session(client, title)
+    students = [("20260001", "Alice"), ("20260002", "Bob"), ("20260003", "Cara")]
+    app_module.upsert_whitelist(session_id, students)
+    join_token = app_module.get_session(session_id)["join_token"]
+
+    for student_id, name in students:
+        response = client.post(
+            f"/join/{join_token}",
+            data={"student_id": student_id, "name": name},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+    response = client.post(f"/admin/{session_id}/lock", follow_redirects=False)
+    assert response.status_code == 303
+    return session_id, students
+
+
+def _submit_contributions(client: TestClient, session_id: str, contributions: dict[str, int]) -> None:
+    for student_id, contrib in contributions.items():
+        response = client.post(
+            f"/api/{session_id}/submit",
+            data={"student_id": student_id, "contrib": str(contrib)},
+        )
+        assert response.status_code == 200
+
+
+def _seed_legacy_results_without_phase_cumulative(db_path: Path, _secret_key: str) -> None:
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE results(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            round_no INTEGER NOT NULL,
+            student_id TEXT NOT NULL,
+            group_no INTEGER NOT NULL,
+            group_n INTEGER NOT NULL,
+            group_total INTEGER NOT NULL,
+            public_return REAL NOT NULL,
+            contrib INTEGER NOT NULL DEFAULT 0,
+            action_sent INTEGER NOT NULL DEFAULT 0,
+            action_received INTEGER NOT NULL DEFAULT 0,
+            action_cost REAL NOT NULL DEFAULT 0,
+            action_effect REAL NOT NULL DEFAULT 0,
+            income REAL NOT NULL,
+            cumulative REAL NOT NULL,
+            computed_at TEXT NOT NULL,
+            UNIQUE(session_id, round_no, student_id)
+        )
+    """
+    )
+    conn.executemany(
+        """
+        INSERT INTO results(
+            session_id, round_no, student_id, group_no, group_n, group_total,
+            public_return, contrib, action_sent, action_received, action_cost,
+            action_effect, income, cumulative, computed_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """,
+        [
+            ("sess-legacy", 1, "stu-1", 1, 3, 6, 3.0, 1, 0, 0, 0.0, 0.0, 12.0, 12.0, "2026-03-08T09:00:00"),
+            ("sess-legacy", 11, "stu-1", 1, 3, 6, 3.0, 1, 0, 0, 0.0, 0.0, 9.0, 21.0, "2026-03-08T10:00:00"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+
 def _insert_sample_session_snapshot(
     app_module,
     session_id: str,
@@ -1369,3 +1440,197 @@ def test_empty_session_title_is_rejected_on_rename(monkeypatch, tmp_path: Path):
 
         session_row = app_module.get_session(session_id)
         assert session_row["title"] == "Valid Title"
+
+
+def test_startup_backfills_phase_fields_and_phase_cumulative(monkeypatch, tmp_path: Path):
+    app_module, db_path = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+        seed_db=_seed_legacy_results_without_phase_cumulative,
+    )
+
+    with TestClient(app_module.app):
+        pass
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        """
+        SELECT round_no, phase, phase_round, phase_cumulative
+        FROM results
+        ORDER BY round_no ASC
+    """
+    ).fetchall()
+    conn.close()
+
+    assert rows == [
+        (1, "baseline", 1, 12.0),
+        (11, "reward", 1, 9.0),
+    ]
+
+
+def test_reward_visibility_resets_each_round_and_action_points_are_capped(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        session_id, students = _setup_grouped_session(client, app_module, "Visibility Session")
+
+        response = client.post(
+            f"/admin/{session_id}/switch_phase",
+            data={"phase": "reward"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        response = client.post(
+            f"/admin/{session_id}/open_round",
+            data={"round_no": "11"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        _submit_contributions(client, session_id, {student_id: idx + 1 for idx, (student_id, _) in enumerate(students)})
+
+        contribution_stage = client.get(f"/api/{session_id}/status", params={"student_id": "20260001"})
+        assert contribution_stage.status_code == 200
+        contribution_payload = contribution_stage.json()
+        assert contribution_payload["session"]["stage"] == "contribution"
+        assert contribution_payload["current_round"]["group_view_visible"] is False
+        assert contribution_payload["group_view"] == []
+        assert contribution_payload["action_targets"] == []
+
+        response = client.post(f"/admin/{session_id}/open_action_stage", follow_redirects=False)
+        assert response.status_code == 303
+
+        action_stage = client.get(f"/api/{session_id}/status", params={"student_id": "20260001"})
+        assert action_stage.status_code == 200
+        action_payload = action_stage.json()
+        assert action_payload["session"]["stage"] == "action"
+        assert action_payload["current_round"]["group_view_visible"] is True
+        assert sorted(row["contrib"] for row in action_payload["group_view"]) == [2, 3]
+        assert len(action_payload["action_targets"]) == 2
+
+        target_anon = action_payload["action_targets"][0]["anonymous_id"]
+        response = client.post(
+            f"/api/{session_id}/submit_actions",
+            json={"student_id": "20260001", "allocations": {target_anon: 6}},
+        )
+        assert response.status_code == 400
+        assert "between 0 and 5" in response.text
+
+        response = client.post(
+            f"/api/{session_id}/submit_actions",
+            json={"student_id": "20260001", "allocations": {target_anon: 5}},
+        )
+        assert response.status_code == 200
+
+        response = client.post(f"/admin/{session_id}/close_and_compute", follow_redirects=False)
+        assert response.status_code == 303
+
+        response = client.post(
+            f"/admin/{session_id}/open_round",
+            data={"round_no": "12"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        next_round = client.get(f"/api/{session_id}/status", params={"student_id": "20260001"})
+        assert next_round.status_code == 200
+        next_round_payload = next_round.json()
+        assert next_round_payload["session"]["stage"] == "contribution"
+        assert next_round_payload["session"]["phase"] == "reward"
+        assert next_round_payload["session"]["phase_round"] == 2
+        assert next_round_payload["current_round"]["group_view_visible"] is False
+        assert next_round_payload["group_view"] == []
+        assert next_round_payload["action_targets"] == []
+
+
+def test_phase_cumulative_resets_and_completed_phase_reports_are_retained(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    baseline_contributions = {
+        "20260001": 2,
+        "20260002": 4,
+        "20260003": 6,
+    }
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        session_id, _ = _setup_grouped_session(client, app_module, "Phase Summary Session")
+
+        for round_no in range(1, 11):
+            response = client.post(
+                f"/admin/{session_id}/open_round",
+                data={"round_no": str(round_no)},
+                follow_redirects=False,
+            )
+            assert response.status_code == 303
+            _submit_contributions(client, session_id, baseline_contributions)
+            response = client.post(f"/admin/{session_id}/close_and_compute", follow_redirects=False)
+            assert response.status_code == 303
+
+        teacher_panel = client.get(f"/admin/{session_id}")
+        assert teacher_panel.status_code == 200
+        assert "Baseline Results" in teacher_panel.text
+
+        response = client.post(
+            f"/admin/{session_id}/open_round",
+            data={"round_no": "11"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        _submit_contributions(
+            client,
+            session_id,
+            {
+                "20260001": 1,
+                "20260002": 2,
+                "20260003": 3,
+            },
+        )
+
+        response = client.post(f"/admin/{session_id}/open_action_stage", follow_redirects=False)
+        assert response.status_code == 303
+
+        alice_status = client.get(f"/api/{session_id}/status", params={"student_id": "20260001"}).json()
+        alice_target = alice_status["action_targets"][0]["anonymous_id"]
+
+        assert client.post(
+            f"/api/{session_id}/submit_actions",
+            json={"student_id": "20260001", "allocations": {alice_target: 2}},
+        ).status_code == 200
+
+        response = client.post(f"/admin/{session_id}/close_and_compute", follow_redirects=False)
+        assert response.status_code == 303
+
+        status = client.get(f"/api/{session_id}/status", params={"student_id": "20260001"})
+        assert status.status_code == 200
+        payload = status.json()
+
+        assert payload["current_phase"]["phase"] == "reward"
+        assert payload["current_phase"]["student_phase_cumulative"] == 10.0
+        assert payload["current_phase"]["group_phase_cumulative"] == 35.0
+        assert [phase["phase"] for phase in payload["completed_phases"]] == ["baseline"]
+        assert payload["completed_phases"][0]["student_summary"]["final_phase_cumulative"] == 140.0
+
+        teacher_panel = client.get(f"/admin/{session_id}")
+        assert teacher_panel.status_code == 200
+        assert "Baseline Results" in teacher_panel.text
+        assert "Within-Group Individual Summary" in teacher_panel.text
+
+        export_response = client.get(f"/admin/{session_id}/export")
+        assert export_response.status_code == 200
+        export_text = export_response.content.decode("utf-8-sig")
+        assert "phase_cumulative" in export_text.splitlines()[0]

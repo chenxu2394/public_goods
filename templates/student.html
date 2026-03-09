@@ -8,17 +8,46 @@
 <div class="card">
   <div><b>Experiment ID / 实验编号:</b> <span class="mono" id="anon_id">{{ stu.anonymous_id }}</span></div>
   <div>Group / 组别: <span id="group_no">{% if stu.group_no %}{{ stu.group_no }}{% else %}Pending assignment / 待分组{% endif %}</span></div>
-  <div class="muted">This page auto-refreshes. You only see anonymous IDs for group members. / 本页面会自动刷新。你只能看到组员的匿名编号。</div>
+  <div class="muted">This page auto-refreshes. Group members are shown only by anonymous ID. / 本页面会自动刷新。组员仅以匿名编号显示。</div>
 </div>
 
 <div class="card">
-  <h3>Current Round / 当前轮次</h3>
+  <h3>Current Phase / 当前情境</h3>
   <div>
     Total round / 总轮次: <b id="cur_round">{{ sess.current_round }}</b> / {{ sess.rounds }}
     <span class="pill" id="phase_badge">-</span>
     <span class="pill" id="stage_badge">-</span>
   </div>
+  <div class="muted" style="margin-top:6px;">
+    Phase progress / 情境进度:
+    <b id="phase_progress">0 / 10</b>
+  </div>
+  <div class="row" style="margin-top:12px;">
+    <div class="col">
+      <div class="muted">Your phase cumulative income / 你的本情境累计收益</div>
+      <div><b id="student_phase_cumulative">0.00</b></div>
+    </div>
+    <div class="col">
+      <div class="muted">Your phase total contribution / 你的本情境累计贡献</div>
+      <div><b id="student_total_contrib">0</b></div>
+    </div>
+    <div class="col">
+      <div class="muted">Group phase cumulative income / 小组本情境累计收益</div>
+      <div><b id="group_phase_cumulative">0.00</b></div>
+    </div>
+    <div class="col">
+      <div class="muted">Group phase total contribution / 小组本情境累计贡献</div>
+      <div><b id="group_total_contrib">0</b></div>
+    </div>
+  </div>
+  <div style="margin-top:10px;">
+    <span class="muted">Phase completion / 情境完成情况:</span>
+    <span id="phase_statuses"></span>
+  </div>
+</div>
 
+<div class="card">
+  <h3>Current Round Action / 当前轮操作</h3>
   <div style="margin-top:12px;" id="contrib_wrap">
     <h4 style="margin:0 0 8px 0;">Contribution / 贡献</h4>
     <form id="submit_form">
@@ -38,7 +67,7 @@
     </form>
   </div>
 
-  <div style="margin-top:12px;" id="action_wrap">
+  <div style="margin-top:12px; display:none;" id="action_wrap">
     <h4 style="margin:0 0 8px 0;" id="action_title">Reward or Punishment / 奖励或惩罚</h4>
     <div class="muted" id="action_desc"></div>
     <form id="action_form" style="margin-top:8px;">
@@ -53,34 +82,18 @@
   </div>
 </div>
 
-<div class="card">
-  <h3>Current Group Anonymous Contributions / 当前小组匿名贡献</h3>
-  <div class="muted">Only anonymous ID + contribution are shown. / 仅显示匿名编号与贡献。</div>
+<div class="card" id="group_view_card" style="display:none;">
+  <h3>Current Round Group Contributions / 当前轮小组投入</h3>
+  <div class="muted">Visible only after the teacher opens the reward or punishment stage. / 仅在教师开放奖励或处罚阶段后可见。</div>
   <table id="group_table" style="margin-top:8px;">
-    <tr><th>ID / 编号</th><th>Contribution / 贡献</th></tr>
+    <tr><th>Anonymous ID / 匿名编号</th><th>Contribution / 贡献</th></tr>
   </table>
 </div>
 
 <div class="card">
-  <h3>Latest Round Feedback / 最新轮次反馈</h3>
-  <div class="muted">After each round is computed, the latest result appears here automatically. / 每轮结算后，最新结果会自动显示在这里。</div>
-  <div style="overflow:auto; margin-top:8px;">
-    <table id="latest_table">
-      <tr><th>Total Round / 总轮次</th><th>Institution / 制度</th><th>Institution Round / 制度内轮次</th><th>Your Contribution / 你的贡献</th><th>Group Total / 组总贡献</th><th>Income / 收益</th><th>Cumulative / 累计收益</th></tr>
-    </table>
-  </div>
-</div>
-
-<div class="card">
-  <h3>Income History / 收益历史</h3>
-  <div class="muted">After round {{ sess.rounds }} is computed, cumulative income is your final total payoff. / 第{{ sess.rounds }}轮结算后，累计收益即为你的最终总报酬。</div>
-  <div style="overflow:auto; margin-top:10px;">
-    <table id="hist_table">
-      <tr>
-        <th>Total Round / 总轮次</th><th>Institution / 制度</th><th>Institution Round / 制度内轮次</th><th>Your Contribution / 你的贡献</th><th>Group Total / 组总贡献</th><th>Income / 收益</th><th>Cumulative / 累计收益</th><th>Computed at / 结算时间</th>
-      </tr>
-    </table>
-  </div>
+  <h3>Completed Phase Results / 已完成情境结果</h3>
+  <div class="muted">Each phase remains visible after it finishes. / 每个情境完成后结果会保留显示。</div>
+  <div id="completed_phases" style="margin-top:12px;"></div>
 </div>
 
 <script>
@@ -108,51 +121,41 @@ function setPhaseAndStage(session){
   stageBadge.className = "pill " + (session.stage === "contribution" ? "ok" : (session.stage === "action" ? "warn" : "muted"));
 }
 
-function renderGroupView(groupView){
+function renderPhaseStatuses(statuses){
+  const container = document.getElementById("phase_statuses");
+  container.innerHTML = "";
+  statuses.forEach(status => {
+    const span = document.createElement("span");
+    span.className = "pill " + (status.completed ? "ok" : "muted");
+    span.style.marginLeft = "8px";
+    span.innerText = `${phaseLabelText(status.phase_label)} ${status.computed_rounds}/${status.total_rounds}`;
+    container.appendChild(span);
+  });
+}
+
+function renderCurrentPhase(summary){
+  document.getElementById("phase_progress").innerText = `${summary.computed_rounds} / ${summary.total_rounds}`;
+  document.getElementById("student_phase_cumulative").innerText = summary.student_phase_cumulative.toFixed(2);
+  document.getElementById("student_total_contrib").innerText = summary.student_total_contrib;
+  document.getElementById("group_phase_cumulative").innerText = summary.group_phase_cumulative.toFixed(2);
+  document.getElementById("group_total_contrib").innerText = summary.group_total_contrib;
+}
+
+function renderGroupView(visible, groupView){
+  const card = document.getElementById("group_view_card");
   const table = document.getElementById("group_table");
   while(table.rows.length > 1) table.deleteRow(1);
-  groupView.forEach(r => {
-    const tr = table.insertRow(-1);
-    tr.insertCell(-1).innerText = r.anonymous_id;
-    tr.insertCell(-1).innerText = r.contrib;
-  });
-}
 
-function renderLatestFeedback(latest){
-  const table = document.getElementById("latest_table");
-  while(table.rows.length > 1) table.deleteRow(1);
-  if(!latest) return;
-  const tr = table.insertRow(-1);
-  [
-    latest.round,
-    phaseLabelText(latest.phase_label),
-    latest.phase_round,
-    latest.contrib,
-    latest.group_total,
-    latest.income.toFixed(2),
-    latest.cumulative.toFixed(2)
-  ].forEach(v => {
-    tr.insertCell(-1).innerText = v;
-  });
-}
+  if(!visible){
+    card.style.display = "none";
+    return;
+  }
 
-function renderHistory(history){
-  const table = document.getElementById("hist_table");
-  while(table.rows.length > 1) table.deleteRow(1);
-  history.forEach(r => {
+  card.style.display = "block";
+  groupView.forEach(row => {
     const tr = table.insertRow(-1);
-    [
-      r.round,
-      phaseLabelText(r.phase_label),
-      r.phase_round,
-      r.contrib,
-      r.group_total,
-      r.income.toFixed(2),
-      r.cumulative.toFixed(2),
-      r.computed_at
-    ].forEach(v => {
-      tr.insertCell(-1).innerText = v;
-    });
+    tr.insertCell(-1).innerText = row.anonymous_id;
+    tr.insertCell(-1).innerText = row.contrib;
   });
 }
 
@@ -164,10 +167,8 @@ function renderActionTargets(data){
 
   while(table.rows.length > 1) table.deleteRow(1);
 
-  const inActionRound = data.session.phase === "reward" || data.session.phase === "punishment";
-  const actionOpen = data.session.stage === "action";
-
-  if(!inActionRound){
+  const showAction = data.session.stage === "action" && (data.session.phase === "reward" || data.session.phase === "punishment");
+  if(!showAction){
     wrap.style.display = "none";
     return;
   }
@@ -175,27 +176,104 @@ function renderActionTargets(data){
   wrap.style.display = "block";
   if(data.session.phase === "reward"){
     title.innerText = "Reward Stage / 奖励阶段";
-    desc.innerText = "Each reward point costs you 1 and gives the target +2 income. You can update your choices until the teacher closes this stage. / 每给予1点奖励，你支付1点，被奖励者增加2点收益。在教师关闭本阶段前，你都可以修改并重新提交。";
+    desc.innerText = "Each reward point costs you 1 and gives the target +2 income. Range: 0-5 for each target. / 每给予某位组员1点奖励，你支付1点成本，对方增加2点收益。每位目标范围为0-5点。";
   }else{
     title.innerText = "Punishment Stage / 惩罚阶段";
-    desc.innerText = "Each punishment point costs you 1 and reduces the target by 3. You can update your choices until the teacher closes this stage. / 每给予1点惩罚，你支付1点，被惩罚者减少3点收益。在教师关闭本阶段前，你都可以修改并重新提交。";
+    desc.innerText = "Each punishment point costs you 1 and reduces the target by 3. Range: 0-5 for each target. / 每给予某位组员1点惩罚，你支付1点成本，对方减少3点收益。每位目标范围为0-5点。";
   }
 
-  data.action_targets.forEach(t => {
+  data.action_targets.forEach(target => {
     const tr = table.insertRow(-1);
-    tr.insertCell(-1).innerText = t.anonymous_id;
+    tr.insertCell(-1).innerText = target.anonymous_id;
     const td = tr.insertCell(-1);
     const inp = document.createElement("input");
     inp.type = "number";
     inp.min = "0";
-    inp.max = "10";
-    inp.value = t.points;
-    inp.dataset.anon = t.anonymous_id;
-    inp.disabled = !actionOpen;
+    inp.max = "5";
+    inp.value = target.points;
+    inp.dataset.anon = target.anonymous_id;
     td.appendChild(inp);
   });
 
-  document.getElementById("action_submit_btn").disabled = !actionOpen;
+  document.getElementById("action_submit_btn").disabled = false;
+}
+
+function renderCompletedPhases(phases){
+  const container = document.getElementById("completed_phases");
+  container.innerHTML = "";
+
+  if(phases.length === 0){
+    container.innerHTML = '<div class="muted">No completed phase yet. / 尚无已完成情境。</div>';
+    return;
+  }
+
+  phases.forEach(phase => {
+    const wrapper = document.createElement("div");
+    wrapper.className = "card";
+
+    const studentRows = phase.student_rows.map(row => `
+      <tr>
+        <td>${row.phase_round}</td>
+        <td>${row.contrib}</td>
+        <td>${row.income.toFixed(2)}</td>
+        <td>${row.phase_cumulative.toFixed(2)}</td>
+        <td>${row.action_sent}</td>
+        <td>${row.action_received}</td>
+      </tr>
+    `).join("");
+
+    const groupRows = phase.group_rows.map(row => `
+      <tr>
+        <td>${row.phase_round}</td>
+        <td>${row.group_total}</td>
+        <td>${row.group_income.toFixed(2)}</td>
+        <td>${row.avg_contrib.toFixed(2)}</td>
+      </tr>
+    `).join("");
+
+    wrapper.innerHTML = `
+      <h4 style="margin:0 0 8px 0;">${phaseLabelText(phase.phase_label)} / ${phase.group_no} 组</h4>
+      <div class="row">
+        <div class="col">
+          <div class="muted">Your total contribution / 你的总贡献</div>
+          <div><b>${phase.student_summary.total_contrib}</b></div>
+        </div>
+        <div class="col">
+          <div class="muted">Your total income / 你的总收益</div>
+          <div><b>${phase.student_summary.total_income.toFixed(2)}</b></div>
+        </div>
+        <div class="col">
+          <div class="muted">Your final phase cumulative / 你的情境累计收益</div>
+          <div><b>${phase.student_summary.final_phase_cumulative.toFixed(2)}</b></div>
+        </div>
+        <div class="col">
+          <div class="muted">Group total income / 小组总收益</div>
+          <div><b>${phase.group_summary.total_income.toFixed(2)}</b></div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <div class="col">
+          <h5 style="margin:0 0 8px 0;">Your 10-round performance / 你的10轮表现</h5>
+          <div style="overflow:auto;">
+            <table>
+              <tr><th>Phase Round / 情境轮次</th><th>Contribution / 贡献</th><th>Income / 收益</th><th>Phase Cumulative / 情境累计收益</th><th>Sent / 发出</th><th>Received / 收到</th></tr>
+              ${studentRows}
+            </table>
+          </div>
+        </div>
+        <div class="col">
+          <h5 style="margin:0 0 8px 0;">Group 10-round performance / 小组10轮表现</h5>
+          <div style="overflow:auto;">
+            <table>
+              <tr><th>Phase Round / 情境轮次</th><th>Group Total / 组总贡献</th><th>Group Income / 组总收益</th><th>Average Contribution / 平均贡献</th></tr>
+              ${groupRows}
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+    container.appendChild(wrapper);
+  });
 }
 
 async function fetchStatus(){
@@ -208,10 +286,13 @@ async function fetchStatus(){
   document.getElementById("anon_id").innerText = data.student.anonymous_id;
 
   setPhaseAndStage(data.session);
+  renderPhaseStatuses(data.phase_statuses);
+  renderCurrentPhase(data.current_phase);
 
   const msg = document.getElementById("submit_msg");
   if(data.current_round.submitted_contrib !== null){
     msg.innerText = `Submitted contribution / 已提交贡献: ${data.current_round.submitted_contrib}`;
+    document.getElementById("contrib").value = data.current_round.submitted_contrib;
   } else {
     msg.innerText = data.session.stage === "contribution" ? "Not submitted yet / 尚未提交" : "Contribution stage closed / 贡献阶段已关闭";
   }
@@ -222,10 +303,9 @@ async function fetchStatus(){
   contribInput.disabled = !canContrib;
   contribBtn.disabled = !canContrib;
 
-  renderGroupView(data.group_view);
+  renderGroupView(data.current_round.group_view_visible, data.group_view);
   renderActionTargets(data);
-  renderLatestFeedback(data.latest_feedback);
-  renderHistory(data.history);
+  renderCompletedPhases(data.completed_phases);
 }
 
 document.getElementById("submit_form").addEventListener("submit", async (e) => {

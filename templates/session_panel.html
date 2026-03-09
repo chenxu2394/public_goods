@@ -206,11 +206,11 @@
       {% if round_ctx.stage == "closed" %}
         <form method="post" action="/admin/{{ sess.id }}/open_round">
           <input type="hidden" name="round_no" value="{{ round_ctx.round }}" />
-          <button type="submit">Open current round</button>
+          <button type="submit">Open contribution stage</button>
         </form>
-        <div class="muted" style="margin-top:6px;">Open contribution stage for the current round.</div>
+        <div class="muted" style="margin-top:6px;">Students can now submit their own contributions privately.</div>
       {% else %}
-        <button type="button" disabled>Open current round</button>
+        <button type="button" disabled>Open contribution stage</button>
         <div class="muted" style="margin-top:6px;">Unavailable while a stage is already open.</div>
       {% endif %}
     </div>
@@ -222,9 +222,9 @@
         <div class="muted" style="margin-top:6px;">Baseline rounds compute immediately after contribution closes.</div>
       {% elif round_ctx.phase != "baseline" and round_ctx.stage == "contribution" %}
         <form method="post" action="/admin/{{ sess.id }}/open_action_stage">
-          <button type="submit">Open {{ round_ctx.phase_label }} stage</button>
+          <button type="submit">Lock contribution and open {{ round_ctx.phase_label }} stage</button>
         </form>
-        <div class="muted" style="margin-top:6px;">This keeps the {{ round_ctx.phase_label|lower }} stage open until you click compute.</div>
+        <div class="muted" style="margin-top:6px;">Students see this round's group contributions only after you open this stage.</div>
       {% elif round_ctx.phase != "baseline" and round_ctx.stage == "action" %}
         <form method="post" action="/admin/{{ sess.id }}/close_and_compute">
           <button type="submit">Close {{ round_ctx.phase_label }} stage and compute round</button>
@@ -236,25 +236,131 @@
       {% endif %}
     </div>
   </div>
+</div>
 
-  <div class="row" style="margin-top:10px;">
+<div class="card">
+  <h3>Phase Overview</h3>
+  <div class="row">
+    {% for status in phase_statuses %}
+      <div class="col">
+        <div><b>{{ status.phase_label }}</b></div>
+        <div class="muted">{{ status.computed_rounds }} / {{ status.total_rounds }} rounds computed</div>
+        {% if status.completed %}
+          <span class="pill ok">Completed</span>
+        {% else %}
+          <span class="pill muted">In progress</span>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="card">
+  <h3>Current Round Progress</h3>
+  <div class="row">
     <div class="col">
-      <form method="post" action="/admin/{{ sess.id }}/switch_phase" style="display:inline;">
-        <input type="hidden" name="phase" value="baseline" />
-        <button type="submit">Go to Baseline</button>
-      </form>
-      <form method="post" action="/admin/{{ sess.id }}/switch_phase" style="display:inline; margin-left:8px;">
-        <input type="hidden" name="phase" value="reward" />
-        <button type="submit">Go to Reward</button>
-      </form>
-      <form method="post" action="/admin/{{ sess.id }}/switch_phase" style="display:inline; margin-left:8px;">
-        <input type="hidden" name="phase" value="punishment" />
-        <button type="submit">Go to Punishment</button>
-      </form>
-      <div class="muted" style="margin-top:6px;">Jump to the first uncomputed round in each institutional phase.</div>
+      <div class="muted">Contribution submissions</div>
+      <div><b>{{ round_progress.contrib_submitted }}</b> / {{ round_progress.student_total }}</div>
+    </div>
+    <div class="col">
+      <div class="muted">{% if round_ctx.phase == "baseline" %}Action submissions{% else %}{{ round_ctx.phase_label }} submissions{% endif %}</div>
+      <div><b>{{ round_progress.action_submitted }}</b> / {{ round_progress.student_total }}</div>
+    </div>
+  </div>
+  {% if round_progress.groups|length > 0 %}
+    <div style="overflow:auto; margin-top:10px;">
+      <table>
+        <tr><th>Group</th><th>Contribution Progress</th><th>Action Progress</th></tr>
+        {% for row in round_progress.groups %}
+          <tr>
+            <td>{{ row.group_no }}</td>
+            <td>{{ row.contrib_submitted }} / {{ row.student_total }}</td>
+            <td>{{ row.action_submitted }} / {{ row.student_total }}</td>
+          </tr>
+        {% endfor %}
+      </table>
+    </div>
+  {% endif %}
+
+  {% if current_round_contrib_rows|length > 0 %}
+    <div style="margin-top:12px;">
+      <h4 style="margin:0 0 8px 0;">Visible Contributions For Current Round</h4>
+      <div class="muted">These contributions become visible only after the contribution stage is locked.</div>
+      <div style="overflow:auto; margin-top:8px;">
+        <table>
+          <tr><th>Group</th><th>Anonymous ID</th><th>Student ID</th><th>Name</th><th>Contribution</th></tr>
+          {% for row in current_round_contrib_rows %}
+            <tr>
+              <td>{{ row.group_no }}</td>
+              <td class="mono">{{ row.anonymous_id }}</td>
+              <td class="mono">{{ row.student_id }}</td>
+              <td>{{ row.name }}</td>
+              <td>{{ row.contrib }}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      </div>
+    </div>
+  {% else %}
+    <div class="muted" style="margin-top:10px;">Individual contributions stay hidden until the reward or punishment stage opens.</div>
+  {% endif %}
+</div>
+
+{% for report in phase_reports %}
+<div class="card">
+  <h3>{{ report.phase_label }} Results</h3>
+  <div class="row">
+    <div class="col">
+      <div class="muted">Phase total contribution</div>
+      <div><b>{{ report.totals.total_contrib }}</b></div>
+    </div>
+    <div class="col">
+      <div class="muted">Phase total income</div>
+      <div><b>{{ "%.2f"|format(report.totals.total_income) }}</b></div>
+    </div>
+  </div>
+
+  <div style="margin-top:12px;">
+    <h4 style="margin:0 0 8px 0;">Group Summary</h4>
+    <div style="overflow:auto;">
+      <table>
+        <tr><th>Group</th><th>Members</th><th>Total Contribution</th><th>Total Income</th><th>Average Contribution</th></tr>
+        {% for row in report.groups %}
+          <tr>
+            <td>{{ row.group_no }}</td>
+            <td>{{ row.group_n }}</td>
+            <td>{{ row.total_contrib }}</td>
+            <td>{{ "%.2f"|format(row.total_income) }}</td>
+            <td>{{ "%.2f"|format(row.avg_contrib) }}</td>
+          </tr>
+        {% endfor %}
+      </table>
+    </div>
+  </div>
+
+  <div style="margin-top:12px;">
+    <h4 style="margin:0 0 8px 0;">Within-Group Individual Summary</h4>
+    <div style="overflow:auto;">
+      <table>
+        <tr><th>Group</th><th>Anonymous ID</th><th>Student ID</th><th>Name</th><th>Total Contribution</th><th>Total Income</th><th>Sent</th><th>Received</th><th>Phase Cumulative</th></tr>
+        {% for row in report.students %}
+          <tr>
+            <td>{{ row.group_no }}</td>
+            <td class="mono">{{ row.anonymous_id }}</td>
+            <td class="mono">{{ row.student_id }}</td>
+            <td>{{ row.name }}</td>
+            <td>{{ row.total_contrib }}</td>
+            <td>{{ "%.2f"|format(row.total_income) }}</td>
+            <td>{{ row.action_sent }}</td>
+            <td>{{ row.action_received }}</td>
+            <td>{{ "%.2f"|format(row.final_phase_cumulative) }}</td>
+          </tr>
+        {% endfor %}
+      </table>
     </div>
   </div>
 </div>
+{% endfor %}
 
 <div class="card">
   <h3>Students (teacher-only identity mapping)</h3>

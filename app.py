@@ -60,6 +60,7 @@ DEFAULT_GROUP_SIZE = 5
 ACTION_COST = 1.0
 REWARD_EFFECT = 2.0
 PUNISH_EFFECT = 3.0
+MAX_ACTION_POINTS = 5
 
 app = FastAPI(title="Public Goods Experiment (Azure + Multi-User Auth)")
 templates = Jinja2Templates(directory=os.path.join(APP_DIR, "templates"))
@@ -373,6 +374,21 @@ def phase_start_round(phase: str) -> int:
     raise HTTPException(400, "Invalid phase")
 
 
+def phase_round_count_for_session(total_rounds: int, phase: str) -> int:
+    start = phase_start_round(phase)
+    if total_rounds < start:
+        return 0
+    return min(PHASE_ROUNDS, total_rounds - start + 1)
+
+
+def phase_round_bounds_for_session(total_rounds: int, phase: str) -> Optional[Tuple[int, int]]:
+    phase_rounds = phase_round_count_for_session(total_rounds, phase)
+    if phase_rounds <= 0:
+        return None
+    start = phase_start_round(phase)
+    return start, start + phase_rounds - 1
+
+
 def stage_of_session(sess: sqlite3.Row) -> str:
     if int(sess["action_open"]) == 1:
         return "action"
@@ -540,6 +556,7 @@ def init_db():
         action_effect REAL NOT NULL DEFAULT 0,
         income REAL NOT NULL,
         cumulative REAL NOT NULL,
+        phase_cumulative REAL NOT NULL DEFAULT 0,
         computed_at TEXT NOT NULL,
         UNIQUE(session_id, round_no, student_id)
     )
@@ -571,6 +588,33 @@ def init_db():
     _ensure_column(conn, "results", "action_received", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "results", "action_cost", "REAL NOT NULL DEFAULT 0")
     _ensure_column(conn, "results", "action_effect", "REAL NOT NULL DEFAULT 0")
+    _ensure_column(conn, "results", "phase_cumulative", "REAL NOT NULL DEFAULT 0")
+
+    result_rows = conn.execute(
+        """
+        SELECT id, session_id, student_id, round_no, income
+        FROM results
+        ORDER BY session_id ASC, student_id ASC, round_no ASC, id ASC
+    """
+    ).fetchall()
+    phase_running: Dict[Tuple[str, str, str], float] = {}
+    phase_updates = []
+    for row in result_rows:
+        round_no = int(row["round_no"])
+        phase, phase_round = phase_for_round(round_no)
+        key = (str(row["session_id"]), str(row["student_id"]), phase)
+        phase_cumulative = phase_running.get(key, 0.0) + float(row["income"])
+        phase_running[key] = phase_cumulative
+        phase_updates.append((phase, phase_round, phase_cumulative, row["id"]))
+    if phase_updates:
+        conn.executemany(
+            """
+            UPDATE results
+            SET phase=?, phase_round=?, phase_cumulative=?
+            WHERE id=?
+        """,
+            phase_updates,
+        )
 
     admin_user = _ensure_bootstrap_admin(conn)
     if admin_user is not None:
@@ -984,7 +1028,7 @@ def _duplicate_session_conn(conn: sqlite3.Connection, session_id: str) -> str:
         """
         SELECT round_no, student_id, group_no, group_n, group_total, public_return,
                contrib, phase, phase_round, action_sent, action_received,
-               action_cost, action_effect, income, cumulative, computed_at
+               action_cost, action_effect, income, cumulative, phase_cumulative, computed_at
         FROM results
         WHERE session_id=?
         ORDER BY id ASC
@@ -997,9 +1041,9 @@ def _duplicate_session_conn(conn: sqlite3.Connection, session_id: str) -> str:
             INSERT INTO results(
                 session_id, round_no, student_id, group_no, group_n, group_total,
                 public_return, contrib, phase, phase_round, action_sent, action_received,
-                action_cost, action_effect, income, cumulative, computed_at
+                action_cost, action_effect, income, cumulative, phase_cumulative, computed_at
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
             [
                 (
@@ -1019,6 +1063,7 @@ def _duplicate_session_conn(conn: sqlite3.Connection, session_id: str) -> str:
                     float(row["action_effect"]),
                     float(row["income"]),
                     float(row["cumulative"]),
+                    float(row["phase_cumulative"]),
                     row["computed_at"],
                 )
                 for row in result_rows
@@ -1318,6 +1363,297 @@ def count_computed_rounds(session_id: str) -> int:
     ).fetchone()["c"]
     conn.close()
     return int(c or 0)
+
+
+def phase_computed_counts_conn(conn: sqlite3.Connection, session_id: str) -> Dict[str, int]:
+    counts = {phase: 0 for phase in PHASES}
+    rows = conn.execute(
+        """
+        SELECT round_no
+        FROM results
+        WHERE session_id=?
+        GROUP BY round_no
+        ORDER BY round_no ASC
+    """,
+        (session_id,),
+    ).fetchall()
+    for row in rows:
+        phase, _ = phase_for_round(int(row["round_no"]))
+        counts[phase] += 1
+    return counts
+
+
+def build_phase_status(total_rounds: int, computed_counts: Dict[str, int]) -> List[Dict[str, object]]:
+    statuses = []
+    for phase in PHASES:
+        phase_rounds = phase_round_count_for_session(total_rounds, phase)
+        if phase_rounds <= 0:
+            continue
+        statuses.append(
+            {
+                "phase": phase,
+                "phase_label": phase_label(phase),
+                "total_rounds": phase_rounds,
+                "computed_rounds": int(computed_counts.get(phase, 0)),
+                "completed": int(computed_counts.get(phase, 0)) >= phase_rounds,
+            }
+        )
+    return statuses
+
+
+def build_student_phase_report_conn(
+    conn: sqlite3.Connection,
+    session_id: str,
+    student_row_id: str,
+    phase: str,
+) -> Optional[Dict[str, object]]:
+    rows = conn.execute(
+        """
+        SELECT round_no, phase_round, group_no, group_n, group_total, contrib,
+               action_sent, action_received, action_cost, action_effect,
+               income, phase_cumulative, computed_at
+        FROM results
+        WHERE session_id=? AND student_id=? AND phase=?
+        ORDER BY round_no ASC
+    """,
+        (session_id, student_row_id, phase),
+    ).fetchall()
+    if not rows:
+        return None
+
+    group_no = int(rows[0]["group_no"])
+    group_n = int(rows[0]["group_n"])
+    group_round_rows = conn.execute(
+        """
+        SELECT round_no,
+               MIN(phase_round) AS phase_round,
+               MAX(group_total) AS group_total,
+               SUM(income) AS group_income,
+               AVG(contrib) AS avg_contrib
+        FROM results
+        WHERE session_id=? AND phase=? AND group_no=?
+        GROUP BY round_no
+        ORDER BY round_no ASC
+    """,
+        (session_id, phase, group_no),
+    ).fetchall()
+
+    student_rows = [
+        {
+            "round": int(row["round_no"]),
+            "phase_round": int(row["phase_round"]),
+            "contrib": int(row["contrib"]),
+            "action_sent": int(row["action_sent"]),
+            "action_received": int(row["action_received"]),
+            "action_cost": float(row["action_cost"]),
+            "action_effect": float(row["action_effect"]),
+            "income": float(row["income"]),
+            "phase_cumulative": float(row["phase_cumulative"]),
+            "computed_at": row["computed_at"],
+        }
+        for row in rows
+    ]
+    group_rows = [
+        {
+            "round": int(row["round_no"]),
+            "phase_round": int(row["phase_round"]),
+            "group_total": int(row["group_total"]),
+            "group_income": float(row["group_income"]),
+            "avg_contrib": float(row["avg_contrib"]),
+        }
+        for row in group_round_rows
+    ]
+
+    total_group_contrib = sum(row["group_total"] for row in group_rows)
+    total_group_income = sum(row["group_income"] for row in group_rows)
+
+    return {
+        "phase": phase,
+        "phase_label": phase_label(phase),
+        "group_no": group_no,
+        "group_n": group_n,
+        "student_summary": {
+            "total_contrib": sum(row["contrib"] for row in student_rows),
+            "total_income": sum(row["income"] for row in student_rows),
+            "action_sent": sum(row["action_sent"] for row in student_rows),
+            "action_received": sum(row["action_received"] for row in student_rows),
+            "final_phase_cumulative": student_rows[-1]["phase_cumulative"],
+        },
+        "student_rows": student_rows,
+        "group_summary": {
+            "total_contrib": total_group_contrib,
+            "total_income": total_group_income,
+            "avg_contrib": (total_group_contrib / (group_n * len(group_rows))) if group_rows and group_n > 0 else 0.0,
+        },
+        "group_rows": group_rows,
+    }
+
+
+def build_teacher_phase_reports_conn(
+    conn: sqlite3.Connection,
+    session_id: str,
+    total_rounds: int,
+    computed_counts: Dict[str, int],
+) -> List[Dict[str, object]]:
+    reports = []
+    for phase in PHASES:
+        phase_rounds = phase_round_count_for_session(total_rounds, phase)
+        if phase_rounds <= 0 or int(computed_counts.get(phase, 0)) < phase_rounds:
+            continue
+
+        group_rows = conn.execute(
+            """
+            SELECT group_no,
+                   MAX(group_n) AS group_n,
+                   SUM(group_total) AS total_contrib,
+                   SUM(group_income) AS total_income,
+                   AVG(avg_contrib) AS avg_contrib
+            FROM (
+                SELECT group_no,
+                       round_no,
+                       MAX(group_n) AS group_n,
+                       MAX(group_total) AS group_total,
+                       SUM(income) AS group_income,
+                       AVG(contrib) AS avg_contrib
+                FROM results
+                WHERE session_id=? AND phase=?
+                GROUP BY group_no, round_no
+            ) per_round
+            GROUP BY group_no
+            ORDER BY group_no ASC
+        """,
+            (session_id, phase),
+        ).fetchall()
+
+        student_rows = conn.execute(
+            """
+            SELECT s.anonymous_id, s.student_id, s.name, r.group_no,
+                   SUM(r.contrib) AS total_contrib,
+                   SUM(r.income) AS total_income,
+                   SUM(r.action_sent) AS action_sent,
+                   SUM(r.action_received) AS action_received,
+                   MAX(r.phase_cumulative) AS final_phase_cumulative
+            FROM results r
+            JOIN students s ON s.id=r.student_id
+            WHERE r.session_id=? AND r.phase=?
+            GROUP BY r.student_id, s.anonymous_id, s.student_id, s.name, r.group_no, s.group_pos, s.joined_at
+            ORDER BY r.group_no ASC, s.group_pos ASC, s.joined_at ASC
+        """,
+            (session_id, phase),
+        ).fetchall()
+
+        groups = [
+            {
+                "group_no": int(row["group_no"]),
+                "group_n": int(row["group_n"]),
+                "total_contrib": int(row["total_contrib"]),
+                "total_income": float(row["total_income"]),
+                "avg_contrib": float(row["avg_contrib"]),
+            }
+            for row in group_rows
+        ]
+        students = [
+            {
+                "anonymous_id": row["anonymous_id"],
+                "student_id": row["student_id"],
+                "name": row["name"],
+                "group_no": int(row["group_no"]),
+                "total_contrib": int(row["total_contrib"]),
+                "total_income": float(row["total_income"]),
+                "action_sent": int(row["action_sent"]),
+                "action_received": int(row["action_received"]),
+                "final_phase_cumulative": float(row["final_phase_cumulative"]),
+            }
+            for row in student_rows
+        ]
+
+        reports.append(
+            {
+                "phase": phase,
+                "phase_label": phase_label(phase),
+                "groups": groups,
+                "students": students,
+                "totals": {
+                    "total_contrib": sum(row["total_contrib"] for row in groups),
+                    "total_income": sum(row["total_income"] for row in groups),
+                },
+            }
+        )
+    return reports
+
+
+def current_round_progress_conn(
+    conn: sqlite3.Connection,
+    session_id: str,
+    round_no: int,
+) -> Dict[str, object]:
+    group_rows = conn.execute(
+        """
+        SELECT s.group_no,
+               COUNT(DISTINCT s.id) AS student_total,
+               COUNT(DISTINCT c.student_id) AS contrib_submitted,
+               COUNT(DISTINCT a.actor_student_id) AS action_submitted
+        FROM students s
+        LEFT JOIN contributions c
+          ON c.session_id=s.session_id
+         AND c.round_no=?
+         AND c.student_id=s.id
+        LEFT JOIN actions a
+          ON a.session_id=s.session_id
+         AND a.round_no=?
+         AND a.actor_student_id=s.id
+        WHERE s.session_id=? AND s.group_no IS NOT NULL
+        GROUP BY s.group_no
+        ORDER BY s.group_no ASC
+    """,
+        (round_no, round_no, session_id),
+    ).fetchall()
+
+    groups = [
+        {
+            "group_no": int(row["group_no"]),
+            "student_total": int(row["student_total"]),
+            "contrib_submitted": int(row["contrib_submitted"] or 0),
+            "action_submitted": int(row["action_submitted"] or 0),
+        }
+        for row in group_rows
+    ]
+    return {
+        "student_total": sum(row["student_total"] for row in groups),
+        "contrib_submitted": sum(row["contrib_submitted"] for row in groups),
+        "action_submitted": sum(row["action_submitted"] for row in groups),
+        "groups": groups,
+    }
+
+
+def current_round_contrib_rows_conn(
+    conn: sqlite3.Connection,
+    session_id: str,
+    round_no: int,
+) -> List[Dict[str, object]]:
+    rows = conn.execute(
+        """
+        SELECT s.group_no, s.anonymous_id, s.student_id, s.name, COALESCE(c.contrib, 0) AS contrib
+        FROM students s
+        LEFT JOIN contributions c
+          ON c.session_id=s.session_id
+         AND c.round_no=?
+         AND c.student_id=s.id
+        WHERE s.session_id=? AND s.group_no IS NOT NULL
+        ORDER BY s.group_no ASC, s.group_pos ASC, s.joined_at ASC
+    """,
+        (round_no, session_id),
+    ).fetchall()
+    return [
+        {
+            "group_no": int(row["group_no"]),
+            "anonymous_id": row["anonymous_id"],
+            "student_id": row["student_id"],
+            "name": row["name"],
+            "contrib": int(row["contrib"]),
+        }
+        for row in rows
+    ]
 
 
 # ---------------- Whitelist ----------------
@@ -1636,6 +1972,17 @@ def compute_results(session_id: str, round_no: int):
         (session_id, round_no - 1),
     ).fetchall()
     prev_cum = {r["student_id"]: float(r["cumulative"]) for r in prev}
+    prev_phase_cum: Dict[str, float] = {}
+    if phase_round > 1:
+        prev_phase_rows = conn.execute(
+            """
+            SELECT student_id, phase_cumulative
+            FROM results
+            WHERE session_id=? AND round_no=?
+        """,
+            (session_id, round_no - 1),
+        ).fetchall()
+        prev_phase_cum = {r["student_id"]: float(r["phase_cumulative"]) for r in prev_phase_rows}
 
     action_sent: Dict[str, int] = {}
     action_received: Dict[str, int] = {}
@@ -1687,6 +2034,7 @@ def compute_results(session_id: str, round_no: int):
 
         income = base_income - action_cost + action_effect
         cumulative = prev_cum.get(sid, 0.0) + income
+        phase_cumulative = prev_phase_cum.get(sid, 0.0) + income
 
         out_rows.append(
             (
@@ -1706,6 +2054,7 @@ def compute_results(session_id: str, round_no: int):
                 action_effect,
                 income,
                 cumulative,
+                phase_cumulative,
                 computed_at,
             )
         )
@@ -1715,9 +2064,9 @@ def compute_results(session_id: str, round_no: int):
         INSERT INTO results(
             session_id, round_no, student_id, group_no, group_n, group_total,
             public_return, contrib, phase, phase_round, action_sent, action_received,
-            action_cost, action_effect, income, cumulative, computed_at
+            action_cost, action_effect, income, cumulative, phase_cumulative, computed_at
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(session_id, round_no, student_id)
         DO UPDATE SET
             group_no=excluded.group_no,
@@ -1733,6 +2082,7 @@ def compute_results(session_id: str, round_no: int):
             action_effect=excluded.action_effect,
             income=excluded.income,
             cumulative=excluded.cumulative,
+            phase_cumulative=excluded.phase_cumulative,
             computed_at=excluded.computed_at
     """,
         out_rows,
@@ -1820,6 +2170,21 @@ def _render_session_panel(
 ):
     students = list_students(str(sess["id"]))
     counts = session_counts(str(sess["id"]))
+    conn = db()
+    total_rounds = int(sess["rounds"])
+    round_no = int(sess["current_round"])
+    phase, _ = phase_for_round(round_no)
+    stage = stage_of_session(sess)
+    computed_counts = phase_computed_counts_conn(conn, str(sess["id"]))
+    phase_statuses = build_phase_status(total_rounds, computed_counts)
+    round_progress = current_round_progress_conn(conn, str(sess["id"]), round_no)
+    current_round_contrib_rows = (
+        current_round_contrib_rows_conn(conn, str(sess["id"]), round_no)
+        if stage == "action" and phase in ("reward", "punishment")
+        else []
+    )
+    phase_reports = build_teacher_phase_reports_conn(conn, str(sess["id"]), total_rounds, computed_counts)
+    conn.close()
 
     share_ctx = _share_link_context(sess)
     export_url = f"{PUBLIC_BASE_URL}/admin/{sess['id']}/export"
@@ -1842,6 +2207,10 @@ def _render_session_panel(
         "display_url": display_url,
         "round_ctx": round_context(sess),
         "computed_rounds": count_computed_rounds(str(sess["id"])),
+        "phase_statuses": phase_statuses,
+        "round_progress": round_progress,
+        "current_round_contrib_rows": current_round_contrib_rows,
+        "phase_reports": phase_reports,
         "transfer_teachers": list_teachers(active_only=True) if user["role"] == USER_ROLE_ADMIN else [],
     }
     context.update(extra)
@@ -2337,7 +2706,7 @@ def admin_export(request: Request, session_id: str):
 
     result_rows = conn.execute(
         """
-        SELECT round_no, student_id, phase, phase_round, income, cumulative, action_sent, action_received
+        SELECT round_no, student_id, phase, phase_round, income, cumulative, phase_cumulative, action_sent, action_received
         FROM results
         WHERE session_id=?
     """,
@@ -2361,6 +2730,7 @@ def admin_export(request: Request, session_id: str):
             "contribution",
             "income",
             "cumulative",
+            "phase_cumulative",
             "action_sent",
             "action_received",
         ]
@@ -2376,6 +2746,7 @@ def admin_export(request: Request, session_id: str):
                 phase_round = rr["phase_round"]
                 income = rr["income"]
                 cumulative = rr["cumulative"]
+                phase_cumulative = rr["phase_cumulative"]
                 action_sent = rr["action_sent"]
                 action_received = rr["action_received"]
             else:
@@ -2383,6 +2754,7 @@ def admin_export(request: Request, session_id: str):
                 phase_round = default_phase_round
                 income = ""
                 cumulative = ""
+                phase_cumulative = ""
                 action_sent = ""
                 action_received = ""
 
@@ -2398,6 +2770,7 @@ def admin_export(request: Request, session_id: str):
                     contrib,
                     income,
                     cumulative,
+                    phase_cumulative,
                     action_sent,
                     action_received,
                 ]
@@ -2635,7 +3008,7 @@ async def api_submit_actions(session_id: str, request: Request):
     rows_to_insert = []
     for anon_id, target_id in target_by_anon.items():
         raw_points = allocations.get(anon_id, 0)
-        points = ensure_int(str(raw_points), 0, 10, f"points[{anon_id}]")
+        points = ensure_int(str(raw_points), 0, MAX_ACTION_POINTS, f"points[{anon_id}]")
         if points > 0:
             rows_to_insert.append((session_id, round_no, stu["id"], target_id, points, now_iso()))
 
@@ -2676,21 +3049,13 @@ def api_status(session_id: str, student_id: str):
         conn.close()
         raise HTTPException(404, "student not found")
 
-    rows = conn.execute(
-        """
-        SELECT round_no, phase, phase_round, group_no, group_n, group_total,
-               public_return, contrib, action_sent, action_received, action_cost,
-               action_effect, income, cumulative, computed_at
-        FROM results
-        WHERE session_id=? AND student_id=?
-        ORDER BY round_no ASC
-    """,
-        (session_id, stu["id"]),
-    ).fetchall()
-
     cur_r = int(sess["current_round"])
     phase, phase_round = phase_for_round(cur_r)
     stage = stage_of_session(sess)
+    total_rounds = int(sess["rounds"])
+    computed_counts = phase_computed_counts_conn(conn, session_id)
+    phase_statuses = build_phase_status(total_rounds, computed_counts)
+    current_phase_report = build_student_phase_report_conn(conn, session_id, str(stu["id"]), phase)
 
     cur_c = conn.execute(
         """
@@ -2712,7 +3077,8 @@ def api_status(session_id: str, student_id: str):
 
     group_view_rows = []
     action_targets = []
-    if stu["group_no"] is not None:
+    group_view_visible = stage == "action" and phase in ("reward", "punishment") and stu["group_no"] is not None
+    if group_view_visible:
         group_view_rows = conn.execute(
             """
             SELECT s.id, s.anonymous_id, COALESCE(c.contrib, 0) AS contrib
@@ -2737,47 +3103,41 @@ def api_status(session_id: str, student_id: str):
                 }
             )
 
-    history = [
-        {
-            "round": int(r["round_no"]),
-            "phase": r["phase"],
-            "phase_label": phase_label(r["phase"]),
-            "phase_round": int(r["phase_round"]),
-            "group_no": int(r["group_no"]),
-            "group_n": int(r["group_n"]),
-            "group_total": int(r["group_total"]),
-            "public_return": float(r["public_return"]),
-            "contrib": int(r["contrib"]),
-            "action_sent": int(r["action_sent"]),
-            "action_received": int(r["action_received"]),
-            "action_cost": float(r["action_cost"]),
-            "action_effect": float(r["action_effect"]),
-            "income": float(r["income"]),
-            "cumulative": float(r["cumulative"]),
-            "computed_at": r["computed_at"],
-        }
-        for r in rows
-    ]
-
-    latest_feedback = history[-1] if history else None
-    latest_group_contrib = []
-    if latest_feedback is not None:
-        latest_rows = conn.execute(
-            """
-            SELECT s.anonymous_id, r.contrib
-            FROM results r
-            JOIN students s ON s.id=r.student_id
-            WHERE r.session_id=? AND r.round_no=? AND r.group_no=?
-            ORDER BY s.group_pos ASC, s.joined_at ASC
-        """,
-            (session_id, int(latest_feedback["round"]), int(latest_feedback["group_no"])),
-        ).fetchall()
-        latest_group_contrib = [
-            {"anonymous_id": r["anonymous_id"], "contrib": int(r["contrib"])}
-            for r in latest_rows
-        ]
+    completed_phases = []
+    for phase_status in phase_statuses:
+        if not phase_status["completed"]:
+            continue
+        report = build_student_phase_report_conn(conn, session_id, str(stu["id"]), str(phase_status["phase"]))
+        if report is None:
+            continue
+        completed_phases.append(report)
 
     conn.close()
+
+    current_phase_summary = {
+        "phase": phase,
+        "phase_label": phase_label(phase),
+        "phase_round": phase_round,
+        "computed_rounds": int(computed_counts.get(phase, 0)),
+        "total_rounds": phase_round_count_for_session(total_rounds, phase),
+        "student_phase_cumulative": 0.0,
+        "student_total_contrib": 0,
+        "group_no": int(stu["group_no"]) if stu["group_no"] is not None else None,
+        "group_phase_cumulative": 0.0,
+        "group_total_contrib": 0,
+    }
+    if current_phase_report is not None:
+        current_phase_summary.update(
+            {
+                "student_phase_cumulative": float(
+                    current_phase_report["student_summary"]["final_phase_cumulative"]
+                ),
+                "student_total_contrib": int(current_phase_report["student_summary"]["total_contrib"]),
+                "group_no": int(current_phase_report["group_no"]),
+                "group_phase_cumulative": float(current_phase_report["group_summary"]["total_income"]),
+                "group_total_contrib": int(current_phase_report["group_summary"]["total_contrib"]),
+            }
+        )
 
     return JSONResponse(
         {
@@ -2803,18 +3163,20 @@ def api_status(session_id: str, student_id: str):
                 "anonymous_id": stu["anonymous_id"],
                 "group_no": stu["group_no"],
             },
+            "phase_statuses": phase_statuses,
+            "current_phase": current_phase_summary,
             "current_round": {
                 "round": cur_r,
                 "submitted_contrib": int(cur_c["contrib"]) if cur_c else None,
+                "group_view_visible": group_view_visible,
             },
             "group_view": [
                 {"anonymous_id": r["anonymous_id"], "contrib": int(r["contrib"])}
                 for r in group_view_rows
+                if r["id"] != stu["id"]
             ],
             "action_targets": action_targets,
-            "history": history,
-            "latest_feedback": latest_feedback,
-            "latest_group_contrib": latest_group_contrib,
+            "completed_phases": completed_phases,
         }
     )
 
