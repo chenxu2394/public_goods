@@ -47,6 +47,8 @@
 <div class="card">
   {% if title_error %}<div class="pill warn" style="margin-bottom:8px;">{{ title_error }}</div>{% endif %}
   {% if join_link_success %}<div class="pill ok" style="margin-bottom:8px;">{{ join_link_success }}</div>{% endif %}
+  {% if demo_error %}<div class="pill warn" style="margin-bottom:8px;">{{ demo_error }}</div>{% endif %}
+  {% if demo_success %}<div class="pill ok" style="margin-bottom:8px;">{{ demo_success }}</div>{% endif %}
   <form method="post" action="/admin/{{ sess.id }}/title" class="row" style="margin-bottom:12px;">
     <div class="col">
       <div class="muted">Session title</div>
@@ -62,6 +64,13 @@
       <button type="submit">Save Title</button>
     </div>
   </form>
+  <div style="margin-bottom:8px;">
+    {% if sess.demo_mode == 1 %}
+      <span class="pill ok">Demo mode active</span>
+    {% else %}
+      <span class="pill muted">Standard session</span>
+    {% endif %}
+  </div>
   {% if is_admin %}
     <div style="margin-bottom:8px;"><b>Session owner:</b> <span class="mono">{{ sess.owner_username or "admin" }}</span></div>
     {% if sess.teacher_removed_at %}
@@ -184,6 +193,57 @@
       {% endif %}
     </div>
   </div>
+</div>
+
+<div class="card">
+  <h3>Demo Tools</h3>
+  <div class="muted">
+    Use this to show the full live classroom procedure without manually joining a real class. Demo automation is enabled only for demo sessions.
+  </div>
+
+  {% if sess.demo_mode == 1 %}
+    <div class="row" style="margin-top:12px;">
+      <div class="col">
+        <form method="post" action="/admin/{{ sess.id }}/demo/fill_contributions">
+          <button type="submit">Auto-fill Contribution Stage</button>
+        </form>
+        <div class="muted" style="margin-top:6px;">Opens the current round if needed, then fills any missing demo contributions.</div>
+      </div>
+      <div class="col">
+        <form method="post" action="/admin/{{ sess.id }}/demo/fill_actions">
+          <button type="submit">Auto-fill Action Stage</button>
+        </form>
+        <div class="muted" style="margin-top:6px;">Opens the reward or punishment stage if needed, then fills demo actions.</div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px;">
+      <div class="col">
+        <form method="post" action="/admin/{{ sess.id }}/demo/run_current_round">
+          <button type="submit">Run Full Current Round</button>
+        </form>
+        <div class="muted" style="margin-top:6px;">Automatically completes the current round through computation.</div>
+      </div>
+      <div class="col">
+        <form method="post" action="/admin/{{ sess.id }}/demo/run_current_phase">
+          <button type="submit">Autoplay Current Phase</button>
+        </form>
+        <div class="muted" style="margin-top:6px;">Automatically runs the remaining rounds in the current phase.</div>
+      </div>
+    </div>
+  {% elif counts.students == 0 and computed_rounds == 0 %}
+    <form method="post" action="/admin/{{ sess.id }}/demo/create_class" class="row" style="margin-top:12px;">
+      <div class="col">
+        <div class="muted">Mock student count</div>
+        <input name="student_count" type="number" value="{{ demo_default_student_count }}" min="3" max="84" />
+      </div>
+      <div class="col" style="align-self:flex-end;">
+        <button type="submit">Create Demo Class</button>
+      </div>
+    </form>
+    <div class="muted" style="margin-top:8px;">This seeds mock students, uploads a matching whitelist, and locks the groups automatically.</div>
+  {% else %}
+    <div class="muted" style="margin-top:10px;">Create demo mode from a fresh session before real students join or rounds are computed.</div>
+  {% endif %}
 </div>
 
 <div class="card">

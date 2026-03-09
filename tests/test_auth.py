@@ -116,6 +116,16 @@ def _submit_contributions(client: TestClient, session_id: str, contributions: di
         assert response.status_code == 200
 
 
+def _create_demo_class(client: TestClient, session_id: str, student_count: int = 24):
+    response = client.post(
+        f"/admin/{session_id}/demo/create_class",
+        data={"student_count": str(student_count)},
+        follow_redirects=False,
+    )
+    assert response.status_code == 200
+    return response
+
+
 def _seed_legacy_results_without_phase_cumulative(db_path: Path, _secret_key: str) -> None:
     conn = sqlite3.connect(db_path)
     conn.execute(
@@ -1634,3 +1644,95 @@ def test_phase_cumulative_resets_and_completed_phase_reports_are_retained(monkey
         assert export_response.status_code == 200
         export_text = export_response.content.decode("utf-8-sig")
         assert "phase_cumulative" in export_text.splitlines()[0]
+
+
+def test_teacher_can_seed_demo_class_and_run_demo_round(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher_temp = _create_teacher(client, "Teacher1")
+
+        assert _login(client, "Teacher1", teacher_temp).status_code == 303
+        assert _change_password(client, teacher_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+
+        session_id = _create_session(client, "Demo Session")
+        response = _create_demo_class(client, session_id, student_count=12)
+        assert "Created demo class with 12 mock students" in response.text
+        assert "Demo mode active" in response.text
+
+        session_row = app_module.get_session(session_id)
+        assert int(session_row["demo_mode"]) == 1
+        assert int(session_row["locked"]) == 1
+
+        counts = app_module.session_counts(session_id)
+        assert counts["students"] == 12
+        assert counts["whitelist"] == 12
+
+        response = client.post(f"/admin/{session_id}/demo/run_current_round", follow_redirects=False)
+        assert response.status_code == 200
+        assert "Demo ran round 1" in response.text
+
+        updated_session = app_module.get_session(session_id)
+        assert int(updated_session["current_round"]) == 2
+        assert int(updated_session["round_open"]) == 0
+        assert int(updated_session["action_open"]) == 0
+
+        conn = sqlite3.connect(app_module.DB_PATH)
+        results_count = conn.execute("SELECT COUNT(*) FROM results WHERE session_id=?", (session_id,)).fetchone()[0]
+        contributions_count = conn.execute(
+            "SELECT COUNT(*) FROM contributions WHERE session_id=? AND round_no=1",
+            (session_id,),
+        ).fetchone()[0]
+        conn.close()
+
+        assert results_count == 12
+        assert contributions_count == 12
+
+
+def test_demo_autoplay_current_phase_advances_reward_phase(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        session_id = _create_session(client, "Demo Autoplay Session")
+        _create_demo_class(client, session_id, student_count=15)
+
+        response = client.post(
+            f"/admin/{session_id}/switch_phase",
+            data={"phase": "reward"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+
+        response = client.post(f"/admin/{session_id}/demo/run_current_phase", follow_redirects=False)
+        assert response.status_code == 200
+        assert "Demo autoplay completed Reward" in response.text
+
+        session_row = app_module.get_session(session_id)
+        assert int(session_row["current_round"]) == 21
+
+        conn = sqlite3.connect(app_module.DB_PATH)
+        reward_rounds = conn.execute(
+            "SELECT COUNT(DISTINCT round_no) FROM results WHERE session_id=? AND phase='reward'",
+            (session_id,),
+        ).fetchone()[0]
+        reward_actions = conn.execute(
+            "SELECT COUNT(*) FROM actions WHERE session_id=? AND round_no BETWEEN 11 AND 20",
+            (session_id,),
+        ).fetchone()[0]
+        conn.close()
+
+        assert reward_rounds == 10
+        assert reward_actions > 0
