@@ -33,6 +33,70 @@ uv run uvicorn app:app --host 0.0.0.0 --port 8000
 
 If you use Docker container deploy, App Service runs this from the image `CMD`.
 
+## Live smoke test against Azure
+
+For a one-person live smoke test against the deployed site, use:
+
+```bash
+python3 scripts/live_smoke_test.py --join-url "https://public-goods.azurewebsites.net/join/<join-token>"
+```
+
+To minimize manual work on a fresh session, pass the admin session URL plus a management username. The script will prompt securely for the password if you omit `--password`:
+
+```bash
+python3 scripts/live_smoke_test.py \
+  --join-url "https://public-goods.azurewebsites.net/join/<join-token>" \
+  --session-url "https://public-goods.azurewebsites.net/admin/<session-id>" \
+  --username "admin"
+```
+
+What it does:
+
+- generates a whitelist CSV for 10 mock students and prints the rows
+- uploads that CSV automatically if `--session-url`/`--session-id` and `--username` are provided
+- joins all 10 mock students through the public join link
+- locks groups and opens the contribution stage automatically when management credentials are provided
+- fires a concurrent contribution burst against the real student API
+- optionally also tests the reward/punishment action API with `--with-actions`
+
+To measure only the classroom submit burst, split the test into two runs:
+
+1. Prepare the session by uploading the whitelist and joining the mock students:
+
+```bash
+python3 scripts/live_smoke_test.py \
+  --mode prepare \
+  --join-url "https://public-goods.azurewebsites.net/join/<join-token>" \
+  --session-url "https://public-goods.azurewebsites.net/admin/<session-id>" \
+  --username "admin" \
+  --students 50 \
+  --join-batch-size 10 \
+  --state-file /tmp/pg-smoke-50.json
+```
+
+2. Later, run only the concurrent contribution burst against those already-joined students:
+
+```bash
+python3 scripts/live_smoke_test.py \
+  --mode submit \
+  --state-file /tmp/pg-smoke-50.json \
+  --username "admin"
+```
+
+Useful flags:
+
+- `--mode prepare` to stop after the join burst
+- `--mode submit` to skip joining and run only the contribution burst
+- `--join-batch-size 10` to prepare the student roster in smaller join waves
+- `--students 5` to reduce the burst size
+- `--session-id <id>` if you prefer pasting the raw session id instead of the admin session URL
+- `--state-file /tmp/pg-smoke.json` to persist and later reuse the joined student roster
+- `--pollers 0` to disable background status polling during the burst
+- `--with-actions` to also test `/api/{session_id}/submit_actions`
+- `--whitelist-out /tmp/smoke.csv` to control where the generated CSV is written
+
+Use a fresh session for this test so the generated `SMOKE...` student IDs are not already present.
+
 ## GitHub Auto Deploy with Docker (GHCR -> Azure)
 
 Workflow file:

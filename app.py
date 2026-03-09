@@ -12,7 +12,8 @@ import hmac
 import hashlib
 import random
 import math
-from typing import Any, List, Dict, Tuple, Optional
+import time
+from typing import Any, Callable, List, Dict, Tuple, Optional, TypeVar
 
 from fastapi import FastAPI, Request, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse
@@ -22,9 +23,30 @@ import segno
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
+def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError:
+        return default
+
+
 # Azure Web App: /home is persistent
 DEFAULT_DB_PATH = "/home/public_goods.db"
 DB_PATH = os.environ.get("PUBLIC_GOODS_DB_PATH", DEFAULT_DB_PATH)
+SQLITE_BUSY_TIMEOUT_MS = _env_int("SQLITE_BUSY_TIMEOUT_MS", 5000)
+SQLITE_WRITE_RETRY_ATTEMPTS = _env_int("SQLITE_WRITE_RETRY_ATTEMPTS", 4, minimum=1)
+SQLITE_WRITE_RETRY_BASE_DELAY_MS = _env_int("SQLITE_WRITE_RETRY_BASE_DELAY_MS", 100)
+_SQLITE_ALLOWED_JOURNAL_MODES = {"DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"}
+_sqlite_journal_mode_raw = (os.environ.get("SQLITE_JOURNAL_MODE") or "WAL").strip().upper()
+SQLITE_JOURNAL_MODE = (
+    _sqlite_journal_mode_raw
+    if _sqlite_journal_mode_raw in _SQLITE_ALLOWED_JOURNAL_MODES
+    else "WAL"
+)
 
 # Auth / account protection
 ADMIN_PASSWORD = (os.environ.get("ADMIN_PASSWORD") or "").strip()
@@ -67,16 +89,55 @@ DEMO_PROFILES = ("cooperator", "conditional", "reciprocator", "free_rider")
 
 app = FastAPI(title="Public Goods Experiment (Azure + Multi-User Auth)")
 templates = Jinja2Templates(directory=os.path.join(APP_DIR, "templates"))
+T = TypeVar("T")
 
 
 def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000.0)
     conn.row_factory = sqlite3.Row
+    conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
     return conn
 
 
 def now_iso() -> str:
     return dt.datetime.now().isoformat(timespec="seconds")
+
+
+def _configure_sqlite_storage(conn: sqlite3.Connection) -> None:
+    if not SQLITE_JOURNAL_MODE:
+        return
+    try:
+        conn.execute(f"PRAGMA journal_mode={SQLITE_JOURNAL_MODE}").fetchone()
+    except sqlite3.DatabaseError:
+        # Keep the current journal mode if SQLite rejects the requested mode.
+        return
+
+
+def _is_locked_sqlite_error(exc: sqlite3.OperationalError) -> bool:
+    msg = str(exc).lower()
+    return "database is locked" in msg or "database table is locked" in msg or "database schema is locked" in msg
+
+
+def _run_write_with_retry(work: Callable[[sqlite3.Connection], T]) -> T:
+    attempt = 0
+    while True:
+        attempt += 1
+        conn = db()
+        try:
+            result = work(conn)
+            conn.commit()
+            return result
+        except sqlite3.OperationalError as exc:
+            conn.rollback()
+            if attempt >= SQLITE_WRITE_RETRY_ATTEMPTS or not _is_locked_sqlite_error(exc):
+                raise
+            if SQLITE_WRITE_RETRY_BASE_DELAY_MS > 0:
+                time.sleep((SQLITE_WRITE_RETRY_BASE_DELAY_MS / 1000.0) * attempt)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -439,6 +500,7 @@ def qr_svg_data_uri(content: str) -> str:
 
 def init_db():
     conn = db()
+    _configure_sqlite_storage(conn)
     cur = conn.cursor()
 
     cur.execute(
@@ -3493,25 +3555,26 @@ def join_submit(join_token: str, student_id: str = Form(...), name: str = Form(.
 
     whitelist_check_or_raise(session_id, student_id, name)
 
-    conn = db()
-    existing = conn.execute(
-        "SELECT id, anonymous_id FROM students WHERE session_id=? AND student_id=?",
-        (session_id, student_id),
-    ).fetchone()
+    def _write_join(conn: sqlite3.Connection) -> str:
+        existing = conn.execute(
+            "SELECT id, anonymous_id FROM students WHERE session_id=? AND student_id=?",
+            (session_id, student_id),
+        ).fetchone()
 
-    if existing:
-        sid = existing["id"]
-        if existing["anonymous_id"]:
-            conn.execute("UPDATE students SET name=? WHERE id=?", (name, sid))
-        else:
-            used_ids = {
-                r["anonymous_id"]
-                for r in conn.execute("SELECT anonymous_id FROM students WHERE session_id=?", (session_id,)).fetchall()
-                if r["anonymous_id"]
-            }
-            anonymous_id = _generate_anonymous_id(used_ids)
-            conn.execute("UPDATE students SET name=?, anonymous_id=? WHERE id=?", (name, anonymous_id, sid))
-    else:
+        if existing:
+            sid = str(existing["id"])
+            if existing["anonymous_id"]:
+                conn.execute("UPDATE students SET name=? WHERE id=?", (name, sid))
+            else:
+                used_ids = {
+                    r["anonymous_id"]
+                    for r in conn.execute("SELECT anonymous_id FROM students WHERE session_id=?", (session_id,)).fetchall()
+                    if r["anonymous_id"]
+                }
+                anonymous_id = _generate_anonymous_id(used_ids)
+                conn.execute("UPDATE students SET name=?, anonymous_id=? WHERE id=?", (name, anonymous_id, sid))
+            return sid
+
         used_ids = {
             r["anonymous_id"]
             for r in conn.execute("SELECT anonymous_id FROM students WHERE session_id=?", (session_id,)).fetchall()
@@ -3526,8 +3589,9 @@ def join_submit(join_token: str, student_id: str = Form(...), name: str = Form(.
         """,
             (sid, session_id, student_id, name, anonymous_id, now_iso(), None, None),
         )
-    conn.commit()
-    conn.close()
+        return sid
+
+    sid = _run_write_with_retry(_write_join)
 
     if int(sess["locked"]) == 1:
         assign_late_joiner(session_id)
@@ -3556,29 +3620,29 @@ def api_submit(session_id: str, student_id: str = Form(...), contrib: str = Form
         raise HTTPException(400, "Contribution stage is not open")
 
     c = ensure_int(contrib, 0, int(sess["endowment"]), "contrib")
-
-    conn = db()
-    stu = conn.execute(
-        "SELECT id FROM students WHERE session_id=? AND student_id=?",
-        (session_id, student_id),
-    ).fetchone()
-    if not stu:
-        conn.close()
-        raise HTTPException(404, "student not found")
-
-    sid = stu["id"]
     round_no = int(sess["current_round"])
-    conn.execute(
-        """
-        INSERT INTO contributions(session_id, round_no, student_id, contrib, created_at)
-        VALUES(?,?,?,?,?)
-        ON CONFLICT(session_id, round_no, student_id)
-        DO UPDATE SET contrib=excluded.contrib, created_at=excluded.created_at
-    """,
-        (session_id, round_no, sid, c, now_iso()),
-    )
-    conn.commit()
-    conn.close()
+
+    def _write_submit(conn: sqlite3.Connection) -> str:
+        stu = conn.execute(
+            "SELECT id FROM students WHERE session_id=? AND student_id=?",
+            (session_id, student_id),
+        ).fetchone()
+        if not stu:
+            raise HTTPException(404, "student not found")
+
+        sid = str(stu["id"])
+        conn.execute(
+            """
+            INSERT INTO contributions(session_id, round_no, student_id, contrib, created_at)
+            VALUES(?,?,?,?,?)
+            ON CONFLICT(session_id, round_no, student_id)
+            DO UPDATE SET contrib=excluded.contrib, created_at=excluded.created_at
+        """,
+            (session_id, round_no, sid, c, now_iso()),
+        )
+        return sid
+
+    _run_write_with_retry(_write_submit)
     return {"ok": True, "round": round_no, "contrib": c}
 
 
@@ -3604,59 +3668,59 @@ async def api_submit_actions(session_id: str, request: Request):
     if not isinstance(allocations, dict):
         raise HTTPException(400, "allocations must be an object")
 
-    conn = db()
-    stu = conn.execute(
-        "SELECT id, group_no FROM students WHERE session_id=? AND student_id=?",
-        (session_id, student_id),
-    ).fetchone()
-    if not stu:
-        conn.close()
-        raise HTTPException(404, "student not found")
-    if stu["group_no"] is None:
-        conn.close()
-        raise HTTPException(400, "group not assigned")
+    def _write_actions(conn: sqlite3.Connection) -> int:
+        stu = conn.execute(
+            "SELECT id, group_no FROM students WHERE session_id=? AND student_id=?",
+            (session_id, student_id),
+        ).fetchone()
+        if not stu:
+            raise HTTPException(404, "student not found")
+        if stu["group_no"] is None:
+            raise HTTPException(400, "group not assigned")
 
-    targets = conn.execute(
-        """
-        SELECT id, anonymous_id
-        FROM students
-        WHERE session_id=? AND group_no=? AND id<>?
-        ORDER BY group_pos ASC, joined_at ASC
-    """,
-        (session_id, int(stu["group_no"]), stu["id"]),
-    ).fetchall()
-
-    target_by_anon = {t["anonymous_id"]: t["id"] for t in targets}
-
-    rows_to_insert = []
-    for anon_id, target_id in target_by_anon.items():
-        raw_points = allocations.get(anon_id, 0)
-        points = ensure_int(str(raw_points), 0, MAX_ACTION_POINTS, f"points[{anon_id}]")
-        if points > 0:
-            rows_to_insert.append((session_id, round_no, stu["id"], target_id, points, now_iso()))
-
-    conn.execute(
-        "DELETE FROM actions WHERE session_id=? AND round_no=? AND actor_student_id=?",
-        (session_id, round_no, stu["id"]),
-    )
-
-    if rows_to_insert:
-        conn.executemany(
+        actor_student_id = str(stu["id"])
+        targets = conn.execute(
             """
-            INSERT INTO actions(session_id, round_no, actor_student_id, target_student_id, points, created_at)
-            VALUES(?,?,?,?,?,?)
+            SELECT id, anonymous_id
+            FROM students
+            WHERE session_id=? AND group_no=? AND id<>?
+            ORDER BY group_pos ASC, joined_at ASC
         """,
-            rows_to_insert,
+            (session_id, int(stu["group_no"]), actor_student_id),
+        ).fetchall()
+
+        target_by_anon = {t["anonymous_id"]: t["id"] for t in targets}
+
+        rows_to_insert = []
+        for anon_id, target_id in target_by_anon.items():
+            raw_points = allocations.get(anon_id, 0)
+            points = ensure_int(str(raw_points), 0, MAX_ACTION_POINTS, f"points[{anon_id}]")
+            if points > 0:
+                rows_to_insert.append((session_id, round_no, actor_student_id, target_id, points, now_iso()))
+
+        conn.execute(
+            "DELETE FROM actions WHERE session_id=? AND round_no=? AND actor_student_id=?",
+            (session_id, round_no, actor_student_id),
         )
 
-    conn.commit()
-    conn.close()
+        if rows_to_insert:
+            conn.executemany(
+                """
+                INSERT INTO actions(session_id, round_no, actor_student_id, target_student_id, points, created_at)
+                VALUES(?,?,?,?,?,?)
+            """,
+                rows_to_insert,
+            )
+
+        return len(rows_to_insert)
+
+    targets_submitted = _run_write_with_retry(_write_actions)
 
     return {
         "ok": True,
         "round": round_no,
         "phase": phase,
-        "targets_submitted": len(rows_to_insert),
+        "targets_submitted": targets_submitted,
     }
 
 

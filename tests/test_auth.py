@@ -400,6 +400,58 @@ def _fetch_session_snapshot(app_module, session_id: str):
     return snapshot
 
 
+def test_init_db_configures_sqlite_pragmas(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    app_module.init_db()
+
+    conn = sqlite3.connect(app_module.DB_PATH)
+    journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    conn.close()
+
+    assert str(journal_mode).lower() == "wal"
+
+    conn = app_module.db()
+    busy_timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+    conn.close()
+    assert int(busy_timeout) == app_module.SQLITE_BUSY_TIMEOUT_MS
+
+
+def test_run_write_with_retry_retries_locked_sqlite_errors(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+    app_module.init_db()
+    monkeypatch.setattr(app_module.time, "sleep", lambda _: None)
+
+    attempts = {"count": 0}
+
+    def work(conn):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise sqlite3.OperationalError("database is locked")
+        conn.execute("INSERT INTO settings(key, value) VALUES(?, ?)", ("retry_key", "retry_value"))
+        return "ok"
+
+    result = app_module._run_write_with_retry(work)
+
+    assert result == "ok"
+    assert attempts["count"] == 3
+
+    conn = sqlite3.connect(app_module.DB_PATH)
+    row = conn.execute("SELECT value FROM settings WHERE key=?", ("retry_key",)).fetchone()
+    conn.close()
+    assert row == ("retry_value",)
+
+
 def _seed_legacy_admin_db(db_path: Path, secret_key: str) -> None:
     conn = sqlite3.connect(db_path)
     conn.execute("CREATE TABLE settings(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
