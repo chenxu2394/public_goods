@@ -14,6 +14,32 @@ Set in Azure Web App -> Configuration -> Application settings:
 - PUBLIC_BASE_URL: https://public-goods.azurewebsites.net (defaults to this)
 - PUBLIC_GOODS_DB_PATH: /home/public_goods.db (defaults to this)
 - ADMIN_COOKIE_SECURE: `1` (default, production) or `0` (local HTTP testing)
+- SQLITE_JOURNAL_MODE: `WAL` (default)
+- SQLITE_BUSY_TIMEOUT_MS: `5000` (default)
+- SQLITE_WRITE_RETRY_ATTEMPTS: `4` (default)
+- SQLITE_WRITE_RETRY_BASE_DELAY_MS: `100` (default)
+
+## Recommended production settings (SQLite on Azure)
+
+For a live class on Azure App Service with SQLite, the recommended setup is:
+
+- App Service plan: `B1`
+- Instance count: `1`
+- `WEBSITES_ENABLE_APP_SERVICE_STORAGE=true`
+- `PUBLIC_GOODS_DB_PATH=/home/public_goods.db`
+- `SQLITE_JOURNAL_MODE=WAL`
+- `SQLITE_BUSY_TIMEOUT_MS=5000`
+- `SQLITE_WRITE_RETRY_ATTEMPTS=4`
+- `SQLITE_WRITE_RETRY_BASE_DELAY_MS=100`
+
+What these SQLite settings do:
+
+- `WAL` reduces reader/writer interference
+- `5000` means SQLite waits up to 5 seconds on a transient lock before failing
+- `4` retries short lock conflicts on write-heavy student actions such as join and submit
+- `100` uses a small retry backoff base in milliseconds
+
+Keep the app single-instance when using SQLite. These settings improve burst tolerance, but SQLite still allows only one writer at a time.
 
 ## Local run (uv)
 
@@ -111,7 +137,7 @@ Required GitHub repo settings:
 
 Trigger:
 
-- Push to `main` (ignore `*.md`)
+- Push to `main` (ignore `*.md` and `scripts/**`)
 - Manual run (`workflow_dispatch`)
 
 ## One-command Azure setup (CLI)
