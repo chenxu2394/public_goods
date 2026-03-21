@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import io
 import sqlite3
 
@@ -8,8 +7,6 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from ..auth import (
-    _auth_gate,
-    _management_gate,
     _must_configure_auth,
     _validate_username,
     generate_temp_password,
@@ -54,6 +51,13 @@ from ..experiment import (
     phase_start_round,
     stage_of_session,
 )
+from ..read_models import (
+    build_admin_home_context,
+    build_export_csv,
+    build_login_page_context,
+    build_session_panel_context,
+    build_share_link_page_context,
+)
 from ..sessions import (
     _get_teacher_or_404,
     _rehash_legacy_user_password_conn,
@@ -66,7 +70,6 @@ from ..sessions import (
     duplicate_session_as_admin,
     duplicate_session_setup_as_admin,
     get_session,
-    get_session_for_user,
     get_user_by_id,
     get_user_by_username,
     parse_whitelist_csv,
@@ -79,16 +82,57 @@ from ..sessions import (
     whitelist_template_csv,
 )
 from ..views import _render_admin_home, _render_login_page, _render_session_panel, _render_share_link_page
+from .helpers import (
+    require_admin_user,
+    require_authenticated_user,
+    require_management_session,
+    require_management_user,
+)
 
 
 router = APIRouter()
+
+
+def _login_page_response(request: Request, *, status_code: int = 200, **extra: object):
+    return _render_login_page(build_login_page_context(request, **extra), status_code=status_code)
+
+
+def _admin_home_response(
+    request: Request,
+    user: sqlite3.Row,
+    *,
+    status_code: int = 200,
+    **extra: object,
+):
+    return _render_admin_home(
+        build_admin_home_context(request, user, **extra),
+        status_code=status_code,
+    )
+
+
+def _session_panel_response(
+    request: Request,
+    user: sqlite3.Row,
+    sess: sqlite3.Row,
+    *,
+    status_code: int = 200,
+    **extra: object,
+):
+    return _render_session_panel(
+        build_session_panel_context(request, user, sess, **extra),
+        status_code=status_code,
+    )
+
+
+def _share_link_page_response(request: Request, sess: sqlite3.Row):
+    return _render_share_link_page(build_share_link_page_context(request, sess))
 
 
 @router.get("/admin/login", response_class=HTMLResponse)
 def admin_login_page(request: Request):
     if get_current_user(request):
         return RedirectResponse(url="/admin", status_code=303)
-    return _render_login_page(request)
+    return _login_page_response(request)
 
 
 @router.post("/admin/login")
@@ -96,13 +140,13 @@ def admin_login_submit(request: Request, username: str = Form(...), password: st
     _must_configure_auth()
     user = get_user_by_username(username)
     if not user:
-        return _render_login_page(request, status_code=401, error="Incorrect username or password.")
+        return _login_page_response(request, status_code=401, error="Incorrect username or password.")
     if user["disabled_at"] is not None:
-        return _render_login_page(request, status_code=403, error="This account is disabled.")
+        return _login_page_response(request, status_code=403, error="This account is disabled.")
 
     password_ok, needs_rehash = verify_user_password(user, password)
     if not password_ok:
-        return _render_login_page(request, status_code=401, error="Incorrect username or password.")
+        return _login_page_response(request, status_code=401, error="Incorrect username or password.")
 
     if needs_rehash:
         conn = db()
@@ -144,12 +188,12 @@ def admin_change_password(
     new_password: str = Form(...),
     confirm_password: str = Form(...),
 ):
-    user, gate = _auth_gate(request)
+    user, gate = require_authenticated_user(request)
     if gate:
         return gate
 
     def _render_error(error: str):
-        return _render_admin_home(request, user, status_code=400, pw_error=error)
+        return _admin_home_response(request, user, status_code=400, pw_error=error)
 
     password_ok, _ = verify_user_password(user, current_password)
     if not password_ok:
@@ -167,15 +211,15 @@ def admin_change_password(
 
 @router.get("/admin", response_class=HTMLResponse)
 def admin_home(request: Request):
-    user, gate = _auth_gate(request)
+    user, gate = require_authenticated_user(request)
     if gate:
         return gate
-    return _render_admin_home(request, user)
+    return _admin_home_response(request, user)
 
 
 @router.post("/admin/teachers")
 def admin_create_teacher(request: Request, username: str = Form(...)):
-    user, gate = _management_gate(request, admin_only=True)
+    user, gate = require_admin_user(request)
     if gate:
         return gate
 
@@ -189,11 +233,11 @@ def admin_create_teacher(request: Request, username: str = Form(...)):
             must_change_password=True,
         )
     except HTTPException as exc:
-        return _render_admin_home(request, user, status_code=exc.status_code, teacher_error=exc.detail)
+        return _admin_home_response(request, user, status_code=exc.status_code, teacher_error=exc.detail)
     except sqlite3.IntegrityError:
-        return _render_admin_home(request, user, status_code=400, teacher_error="That username already exists.")
+        return _admin_home_response(request, user, status_code=400, teacher_error="That username already exists.")
 
-    return _render_admin_home(
+    return _admin_home_response(
         request,
         user,
         teacher_success=f"Created teacher '{username}'.",
@@ -204,7 +248,7 @@ def admin_create_teacher(request: Request, username: str = Form(...)):
 
 @router.post("/admin/teachers/{user_id}/disable")
 def admin_disable_teacher(request: Request, user_id: str):
-    user, gate = _management_gate(request, admin_only=True)
+    user, gate = require_admin_user(request)
     if gate:
         return gate
 
@@ -215,7 +259,7 @@ def admin_disable_teacher(request: Request, user_id: str):
 
 @router.post("/admin/teachers/{user_id}/enable")
 def admin_enable_teacher(request: Request, user_id: str):
-    user, gate = _management_gate(request, admin_only=True)
+    user, gate = require_admin_user(request)
     if gate:
         return gate
 
@@ -226,14 +270,14 @@ def admin_enable_teacher(request: Request, user_id: str):
 
 @router.post("/admin/teachers/{user_id}/reset_password")
 def admin_reset_teacher_password(request: Request, user_id: str):
-    user, gate = _management_gate(request, admin_only=True)
+    user, gate = require_admin_user(request)
     if gate:
         return gate
 
     teacher = _get_teacher_or_404(user_id)
     temp_password = generate_temp_password()
     set_user_password(str(teacher["id"]), temp_password, must_change_password=True)
-    return _render_admin_home(
+    return _admin_home_response(
         request,
         user,
         teacher_success=f"Reset password for '{teacher['username']}'.",
@@ -251,7 +295,7 @@ def admin_create_session(
     endowment: int = Form(10),
     rounds: int = Form(TOTAL_EXPERIMENT_ROUNDS),
 ):
-    user, gate = _management_gate(request)
+    user, gate = require_management_user(request)
     if gate:
         return gate
 
@@ -278,35 +322,30 @@ def admin_create_session(
 
 @router.get("/admin/{session_id}", response_class=HTMLResponse)
 def admin_panel(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, sess, gate = require_management_session(request, session_id)
     if gate:
         return gate
-
-    sess = get_session_for_user(session_id, user)
-    return _render_session_panel(request, user, sess)
+    return _session_panel_response(request, user, sess)
 
 
 @router.get("/admin/{session_id}/share", response_class=HTMLResponse)
 def admin_share_link_page(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, sess, gate = require_management_session(request, session_id)
     if gate:
         return gate
-
-    sess = get_session_for_user(session_id, user)
-    return _render_share_link_page(request, sess)
+    return _share_link_page_response(request, sess)
 
 
 @router.post("/admin/{session_id}/title")
 def admin_update_session_title(request: Request, session_id: str, title: str = Form(...)):
-    user, gate = _management_gate(request)
+    user, sess, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    sess = get_session_for_user(session_id, user)
     try:
         title = _validate_session_title(title)
     except HTTPException as exc:
-        return _render_session_panel(request, user, sess, status_code=exc.status_code, title_error=exc.detail)
+        return _session_panel_response(request, user, sess, status_code=exc.status_code, title_error=exc.detail)
 
     set_session_title(session_id, title)
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
@@ -314,14 +353,13 @@ def admin_update_session_title(request: Request, session_id: str, title: str = F
 
 @router.post("/admin/{session_id}/rotate_join_link")
 def admin_rotate_join_link(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, _, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    _ = get_session_for_user(session_id, user)
     rotate_session_join_token(session_id)
     updated_sess = get_session(session_id)
-    return _render_session_panel(
+    return _session_panel_response(
         request,
         user,
         updated_sess,
@@ -331,17 +369,16 @@ def admin_rotate_join_link(request: Request, session_id: str):
 
 @router.post("/admin/{session_id}/transfer")
 def admin_transfer_session(request: Request, session_id: str, teacher_user_id: str = Form(...)):
-    user, gate = _management_gate(request, admin_only=True)
+    user, sess, gate = require_management_session(request, session_id, admin_only=True)
     if gate:
         return gate
 
-    sess = get_session_for_user(session_id, user)
     teacher_user_id = teacher_user_id.strip()
     teacher = get_user_by_id(teacher_user_id)
     if not teacher or teacher["role"] != USER_ROLE_TEACHER:
-        return _render_session_panel(request, user, sess, status_code=400, transfer_error="Select a valid teacher.")
+        return _session_panel_response(request, user, sess, status_code=400, transfer_error="Select a valid teacher.")
     if teacher["disabled_at"] is not None:
-        return _render_session_panel(
+        return _session_panel_response(
             request,
             user,
             sess,
@@ -349,7 +386,7 @@ def admin_transfer_session(request: Request, session_id: str, teacher_user_id: s
             transfer_error="You cannot transfer a session to a disabled teacher.",
         )
     if sess["owner_user_id"] == teacher["id"]:
-        return _render_session_panel(
+        return _session_panel_response(
             request,
             user,
             sess,
@@ -359,7 +396,7 @@ def admin_transfer_session(request: Request, session_id: str, teacher_user_id: s
 
     transfer_session_owner(session_id, str(teacher["id"]))
     updated_sess = get_session(session_id)
-    return _render_session_panel(
+    return _session_panel_response(
         request,
         user,
         updated_sess,
@@ -369,33 +406,30 @@ def admin_transfer_session(request: Request, session_id: str, teacher_user_id: s
 
 @router.post("/admin/{session_id}/duplicate")
 def admin_duplicate_session(request: Request, session_id: str):
-    user, gate = _management_gate(request, admin_only=True)
+    user, _, gate = require_management_session(request, session_id, admin_only=True)
     if gate:
         return gate
 
-    _ = get_session_for_user(session_id, user)
     duplicate_session_id = duplicate_session_as_admin(session_id)
     return RedirectResponse(url=f"/admin/{duplicate_session_id}", status_code=303)
 
 
 @router.post("/admin/{session_id}/duplicate_setup")
 def admin_duplicate_session_setup(request: Request, session_id: str):
-    user, gate = _management_gate(request, admin_only=True)
+    user, _, gate = require_management_session(request, session_id, admin_only=True)
     if gate:
         return gate
 
-    _ = get_session_for_user(session_id, user)
     duplicate_session_id = duplicate_session_setup_as_admin(session_id)
     return RedirectResponse(url=f"/admin/{duplicate_session_id}", status_code=303)
 
 
 @router.post("/admin/{session_id}/lock")
 def admin_lock(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, sess, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    sess = get_session_for_user(session_id, user)
     if int(sess["locked"]) == 0:
         lock_groups(session_id, int(sess["group_size"]))
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
@@ -403,20 +437,19 @@ def admin_lock(request: Request, session_id: str):
 
 @router.post("/admin/{session_id}/demo/create_class")
 def admin_demo_create_class(request: Request, session_id: str, student_count: str = Form(str(DEMO_DEFAULT_STUDENT_COUNT))):
-    user, gate = _management_gate(request)
+    user, _, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    _ = get_session_for_user(session_id, user)
     try:
         count = ensure_int(student_count, MIN_GROUP_SIZE, DEMO_MAX_STUDENT_COUNT, "student_count")
         create_demo_class(session_id, count)
     except HTTPException as exc:
         updated_sess = get_session(session_id)
-        return _render_session_panel(request, user, updated_sess, status_code=exc.status_code, demo_error=exc.detail)
+        return _session_panel_response(request, user, updated_sess, status_code=exc.status_code, demo_error=exc.detail)
 
     updated_sess = get_session(session_id)
-    return _render_session_panel(
+    return _session_panel_response(
         request,
         user,
         updated_sess,
@@ -426,11 +459,10 @@ def admin_demo_create_class(request: Request, session_id: str, student_count: st
 
 @router.post("/admin/{session_id}/demo/fill_contributions")
 def admin_demo_fill_contributions(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, _, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    _ = get_session_for_user(session_id, user)
     try:
         sess = get_session(session_id)
         if int(sess["demo_mode"]) != 1:
@@ -441,10 +473,10 @@ def admin_demo_fill_contributions(request: Request, session_id: str):
         filled = simulate_demo_contributions(session_id, int(sess["current_round"]))
     except HTTPException as exc:
         updated_sess = get_session(session_id)
-        return _render_session_panel(request, user, updated_sess, status_code=exc.status_code, demo_error=exc.detail)
+        return _session_panel_response(request, user, updated_sess, status_code=exc.status_code, demo_error=exc.detail)
 
     updated_sess = get_session(session_id)
-    return _render_session_panel(
+    return _session_panel_response(
         request,
         user,
         updated_sess,
@@ -454,11 +486,10 @@ def admin_demo_fill_contributions(request: Request, session_id: str):
 
 @router.post("/admin/{session_id}/demo/fill_actions")
 def admin_demo_fill_actions(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, _, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    _ = get_session_for_user(session_id, user)
     try:
         sess = get_session(session_id)
         if int(sess["demo_mode"]) != 1:
@@ -471,10 +502,10 @@ def admin_demo_fill_actions(request: Request, session_id: str):
         filled = simulate_demo_actions(session_id, round_no)
     except HTTPException as exc:
         updated_sess = get_session(session_id)
-        return _render_session_panel(request, user, updated_sess, status_code=exc.status_code, demo_error=exc.detail)
+        return _session_panel_response(request, user, updated_sess, status_code=exc.status_code, demo_error=exc.detail)
 
     updated_sess = get_session(session_id)
-    return _render_session_panel(
+    return _session_panel_response(
         request,
         user,
         updated_sess,
@@ -484,19 +515,18 @@ def admin_demo_fill_actions(request: Request, session_id: str):
 
 @router.post("/admin/{session_id}/demo/run_current_round")
 def admin_demo_run_current_round(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, _, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    _ = get_session_for_user(session_id, user)
     try:
         summary = simulate_demo_current_round(session_id)
     except HTTPException as exc:
         updated_sess = get_session(session_id)
-        return _render_session_panel(request, user, updated_sess, status_code=exc.status_code, demo_error=exc.detail)
+        return _session_panel_response(request, user, updated_sess, status_code=exc.status_code, demo_error=exc.detail)
 
     updated_sess = get_session(session_id)
-    return _render_session_panel(
+    return _session_panel_response(
         request,
         user,
         updated_sess,
@@ -510,19 +540,18 @@ def admin_demo_run_current_round(request: Request, session_id: str):
 
 @router.post("/admin/{session_id}/demo/run_current_phase")
 def admin_demo_run_current_phase(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, _, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    _ = get_session_for_user(session_id, user)
     try:
         summary = simulate_demo_current_phase(session_id)
     except HTTPException as exc:
         updated_sess = get_session(session_id)
-        return _render_session_panel(request, user, updated_sess, status_code=exc.status_code, demo_error=exc.detail)
+        return _session_panel_response(request, user, updated_sess, status_code=exc.status_code, demo_error=exc.detail)
 
     updated_sess = get_session(session_id)
-    return _render_session_panel(
+    return _session_panel_response(
         request,
         user,
         updated_sess,
@@ -534,7 +563,7 @@ def admin_demo_run_current_phase(request: Request, session_id: str):
 
 @router.post("/admin/{session_id}/switch_phase")
 def admin_switch_phase(request: Request, session_id: str, phase: str = Form(...)):
-    user, gate = _management_gate(request)
+    user, sess, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
@@ -542,7 +571,6 @@ def admin_switch_phase(request: Request, session_id: str, phase: str = Form(...)
     if phase not in PHASES:
         raise HTTPException(400, "invalid phase")
 
-    sess = get_session_for_user(session_id, user)
     rounds = int(sess["rounds"])
     start = phase_start_round(phase)
     if start > rounds:
@@ -572,11 +600,10 @@ def admin_switch_phase(request: Request, session_id: str, phase: str = Form(...)
 
 @router.post("/admin/{session_id}/open_round")
 def admin_open_round(request: Request, session_id: str, round_no: int | None = Form(None)):
-    user, gate = _management_gate(request)
+    user, sess, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    sess = get_session_for_user(session_id, user)
     if int(sess["locked"]) != 1:
         raise HTTPException(400, "Please lock groups before opening rounds.")
     if stage_of_session(sess) != "closed":
@@ -595,11 +622,10 @@ def admin_open_round(request: Request, session_id: str, round_no: int | None = F
 
 @router.post("/admin/{session_id}/open_action_stage")
 def admin_open_action_stage(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, sess, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    sess = get_session_for_user(session_id, user)
     if int(sess["locked"]) != 1:
         raise HTTPException(400, "Please lock groups before opening rounds.")
 
@@ -620,11 +646,10 @@ def admin_open_action_stage(request: Request, session_id: str):
 
 @router.post("/admin/{session_id}/close_and_compute")
 def admin_close_and_compute(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, sess, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    sess = get_session_for_user(session_id, user)
     stage = stage_of_session(sess)
     round_no = int(sess["current_round"])
     rounds = int(sess["rounds"])
@@ -644,103 +669,11 @@ def admin_close_and_compute(request: Request, session_id: str):
 
 @router.get("/admin/{session_id}/export")
 def admin_export(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, sess, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    sess = get_session_for_user(session_id, user)
-    conn = db()
-    students = conn.execute(
-        """
-        SELECT id, anonymous_id, student_id, name, group_no
-        FROM students
-        WHERE session_id=?
-        ORDER BY group_no ASC, group_pos ASC, joined_at ASC
-    """,
-        (session_id,),
-    ).fetchall()
-
-    rounds = int(sess["rounds"])
-
-    contrib_rows = conn.execute(
-        "SELECT round_no, student_id, contrib FROM contributions WHERE session_id=?",
-        (session_id,),
-    ).fetchall()
-    contrib_map = {(int(row["round_no"]), row["student_id"]): int(row["contrib"]) for row in contrib_rows}
-
-    result_rows = conn.execute(
-        """
-        SELECT round_no, student_id, phase, phase_round, income, cumulative, phase_cumulative, action_sent, action_received
-        FROM results
-        WHERE session_id=?
-    """,
-        (session_id,),
-    ).fetchall()
-    result_map = {(int(row["round_no"]), row["student_id"]): row for row in result_rows}
-    conn.close()
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(
-        [
-            "experiment_id",
-            "anonymous_id",
-            "student_id",
-            "name",
-            "phase",
-            "phase_round",
-            "round_no",
-            "contribution",
-            "income",
-            "cumulative",
-            "phase_cumulative",
-            "action_sent",
-            "action_received",
-        ]
-    )
-
-    for student in students:
-        for round_no in range(1, rounds + 1):
-            default_phase, default_phase_round = phase_for_round(round_no)
-            contrib = contrib_map.get((round_no, student["id"]), "")
-            result_row = result_map.get((round_no, student["id"]))
-            if result_row:
-                phase = result_row["phase"]
-                phase_round = result_row["phase_round"]
-                income = result_row["income"]
-                cumulative = result_row["cumulative"]
-                phase_cumulative = result_row["phase_cumulative"]
-                action_sent = result_row["action_sent"]
-                action_received = result_row["action_received"]
-            else:
-                phase = default_phase
-                phase_round = default_phase_round
-                income = ""
-                cumulative = ""
-                phase_cumulative = ""
-                action_sent = ""
-                action_received = ""
-
-            writer.writerow(
-                [
-                    session_id,
-                    student["anonymous_id"],
-                    student["student_id"],
-                    student["name"],
-                    phase,
-                    phase_round,
-                    round_no,
-                    contrib,
-                    income,
-                    cumulative,
-                    phase_cumulative,
-                    action_sent,
-                    action_received,
-                ]
-            )
-
-    data = output.getvalue().encode("utf-8-sig")
-    filename = f"public_goods_{session_id}.csv"
+    filename, data = build_export_csv(session_id, int(sess["rounds"]))
     return StreamingResponse(
         io.BytesIO(data),
         media_type="text/csv",
@@ -750,11 +683,10 @@ def admin_export(request: Request, session_id: str):
 
 @router.get("/admin/{session_id}/whitelist/template")
 def admin_whitelist_template(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, _, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    _ = get_session_for_user(session_id, user)
     data = whitelist_template_csv()
     filename = f"whitelist_template_{session_id}.csv"
     return StreamingResponse(
@@ -766,11 +698,10 @@ def admin_whitelist_template(request: Request, session_id: str):
 
 @router.post("/admin/{session_id}/whitelist/upload")
 async def admin_whitelist_upload(request: Request, session_id: str, file: UploadFile = File(...)):
-    user, gate = _management_gate(request)
+    user, _, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    _ = get_session_for_user(session_id, user)
     content = await file.read()
     try:
         entries = parse_whitelist_csv(content)
@@ -786,22 +717,20 @@ async def admin_whitelist_upload(request: Request, session_id: str, file: Upload
 
 @router.post("/admin/{session_id}/whitelist/clear")
 def admin_whitelist_clear(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, _, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    _ = get_session_for_user(session_id, user)
     clear_whitelist(session_id)
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
 
 
 @router.post("/admin/{session_id}/delete")
 def admin_delete_session(request: Request, session_id: str):
-    user, gate = _management_gate(request)
+    user, _, gate = require_management_session(request, session_id)
     if gate:
         return gate
 
-    _ = get_session_for_user(session_id, user)
     if user["role"] == USER_ROLE_ADMIN:
         delete_session(session_id)
     else:

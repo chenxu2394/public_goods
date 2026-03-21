@@ -158,6 +158,55 @@ def test_late_joiner_is_assigned_without_rebalancing_existing_groups(monkeypatch
     assert updated_rows["20260012"]["group_pos"] == 1
 
 
+def test_admin_panel_renders_for_admin_and_teacher(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+    teacher_password = "Teacher1-final-pass"
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        teacher = app_module.create_user(
+            "Teacher1",
+            app_module.USER_ROLE_TEACHER,
+            teacher_password,
+            must_change_password=False,
+        )
+        session_id = create_session(client, "Render Session")
+
+        admin_panel = client.get(f"/admin/{session_id}")
+        assert admin_panel.status_code == 200
+        assert "Render Session" in admin_panel.text
+
+        app_module.transfer_session_owner(session_id, str(teacher["id"]))
+        assert login(client, "Teacher1", teacher_password).status_code == 303
+
+        teacher_panel = client.get(f"/admin/{session_id}")
+        assert teacher_panel.status_code == 200
+        assert "Render Session" in teacher_panel.text
+
+
+def test_share_link_page_and_api_payload_remain_consistent(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id = create_session(client, "Share Link Regression")
+        join_token = app_module.get_session(session_id)["join_token"]
+
+        share_page = client.get(f"/admin/{session_id}/share")
+        assert share_page.status_code == 200
+        assert "Student join link" in share_page.text
+        assert f"/join/{join_token}" in share_page.text
+
+        share_api = client.get(f"/api/admin/{session_id}/share_link")
+        assert share_api.status_code == 200
+        payload = share_api.json()
+
+    assert payload["session"]["id"] == session_id
+    assert payload["session"]["title"] == "Share Link Regression"
+    assert payload["join_url"].endswith(join_token)
+    assert payload["join_qr_data_uri"].startswith("data:image/svg+xml;base64,")
+
+
 def test_cannot_open_action_stage_during_baseline(monkeypatch, tmp_path):
     app_module, _ = load_app(monkeypatch, tmp_path)
 
@@ -363,3 +412,25 @@ def test_export_includes_expected_phase_and_action_fields_per_round(monkeypatch,
     assert bob_future_reward["action_sent"] == ""
     assert bob_future_reward["action_received"] == ""
     assert bob_future_reward["phase_cumulative"] == ""
+
+
+def test_export_header_order_remains_stable(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id, _, _ = setup_grouped_session(
+            client,
+            app_module,
+            "Header Export Session",
+            rounds=1,
+        )
+
+        export_response = client.get(f"/admin/{session_id}/export")
+
+    assert export_response.status_code == 200
+    header = export_response.content.decode("utf-8-sig").splitlines()[0]
+    assert header == (
+        "experiment_id,anonymous_id,student_id,name,phase,phase_round,round_no,contribution,"
+        "income,cumulative,phase_cumulative,action_sent,action_received"
+    )
