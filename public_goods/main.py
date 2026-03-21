@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 
@@ -9,16 +11,18 @@ from .routes import admin, display, student
 from .views import templates
 
 
-def create_app() -> FastAPI:
-    app = FastAPI(title=APP_TITLE)
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    init_db()
+    yield
 
-    @app.on_event("startup")
-    def _startup():
-        init_db()
+
+def create_app() -> FastAPI:
+    app = FastAPI(title=APP_TITLE, lifespan=_lifespan)
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request):
-        return templates.TemplateResponse("home.html", {"request": request})
+        return templates.TemplateResponse(request, "home.html", {"request": request})
 
     app.include_router(admin.router)
     app.include_router(student.router)

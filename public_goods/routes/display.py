@@ -18,7 +18,7 @@ router = APIRouter()
 @router.get("/display/{session_id}", response_class=HTMLResponse)
 def display_page(request: Request, session_id: str):
     sess = get_session(session_id)
-    return templates.TemplateResponse("display.html", {"request": request, "sess": sess})
+    return templates.TemplateResponse(request, "display.html", {"request": request, "sess": sess})
 
 
 @router.get("/api/{session_id}/display_status")

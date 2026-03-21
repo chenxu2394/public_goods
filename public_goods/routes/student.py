@@ -29,6 +29,7 @@ def join_page(request: Request, join_token: str):
     session_id = str(sess["id"])
     counts = session_counts(session_id)
     return templates.TemplateResponse(
+        request,
         "join.html",
         {"request": request, "sess": sess, "counts": counts, "join_token": join_token},
     )
@@ -58,7 +59,7 @@ def student_page(request: Request, session_id: str, student_id: str):
     stu = get_student_by_public_id(session_id, student_id)
     if not stu:
         return RedirectResponse(url=f"/join/{session_id}", status_code=303)
-    return templates.TemplateResponse("student.html", {"request": request, "sess": sess, "stu": stu})
+    return templates.TemplateResponse(request, "student.html", {"request": request, "sess": sess, "stu": stu})
 
 
 @router.post("/api/{session_id}/submit")
