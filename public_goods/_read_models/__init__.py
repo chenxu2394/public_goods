@@ -1,0 +1,1 @@
+"""Internal read-model helpers."""
