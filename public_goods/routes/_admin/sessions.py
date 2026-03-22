@@ -4,7 +4,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ...config import DEFAULT_GROUP_SIZE, MAX_GROUP_SIZE, MIN_GROUP_SIZE, TOTAL_EXPERIMENT_ROUNDS, USER_ROLE_ADMIN, USER_ROLE_TEACHER
-from ...sessions import (
+from ..._sessions import (
     _validate_session_title,
     archive_session_to_admin,
     create_session_record,

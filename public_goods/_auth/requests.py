@@ -11,7 +11,7 @@ from .tokens import verify_auth_token
 
 
 def get_current_user(request: Request) -> Optional[sqlite3.Row]:
-    from .._sessions.users import get_user_by_id
+    from .._sessions import get_user_by_id
 
     if getattr(request.state, "_auth_loaded", False):
         return getattr(request.state, "_auth_user", None)
@@ -53,4 +53,3 @@ def _management_gate(request: Request, *, admin_only: bool = False) -> Tuple[Opt
     if int(user["must_change_password"]) == 1:
         return user, RedirectResponse(url="/admin?pw_change_required=1", status_code=303)
     return user, None
-

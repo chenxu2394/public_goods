@@ -7,7 +7,7 @@ from .schema import create_schema, create_session_join_token_index
 
 
 def init_db() -> None:
-    from .._sessions.users import _backfill_session_join_tokens, _backfill_session_owners, _ensure_bootstrap_admin
+    from .._sessions import _backfill_session_join_tokens, _backfill_session_owners, _ensure_bootstrap_admin
 
     conn = db()
     try:
@@ -27,4 +27,3 @@ def init_db() -> None:
         conn.commit()
     finally:
         conn.close()
-

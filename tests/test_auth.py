@@ -521,7 +521,7 @@ def test_get_current_user_caches_request_state(monkeypatch, tmp_path: Path):
     )
     app_module.init_db()
 
-    import public_goods._sessions.users as users_module
+    import public_goods._sessions as sessions_module
     import public_goods.auth as auth_module
 
     user = app_module.get_user_by_username("admin")
@@ -544,14 +544,14 @@ def test_get_current_user_caches_request_state(monkeypatch, tmp_path: Path):
     )
 
     calls = 0
-    original_get_user_by_id = users_module.get_user_by_id
+    original_get_user_by_id = sessions_module.get_user_by_id
 
     def counting_get_user_by_id(user_id: str):
         nonlocal calls
         calls += 1
         return original_get_user_by_id(user_id)
 
-    monkeypatch.setattr(users_module, "get_user_by_id", counting_get_user_by_id)
+    monkeypatch.setattr(sessions_module, "get_user_by_id", counting_get_user_by_id)
 
     first = auth_module.get_current_user(request)
     second = auth_module.get_current_user(request)

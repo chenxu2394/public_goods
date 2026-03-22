@@ -11,7 +11,7 @@ from ..experiment import (
     phase_round_count_for_session,
     stage_of_session,
 )
-from ..sessions import get_session
+from .._sessions import get_session
 from .types import StudentStatusPayload
 
 

@@ -7,7 +7,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse
 
 from ..auth import _auth_gate, _management_gate
-from ..sessions import get_session_for_user
+from .._sessions import get_session_for_user
 
 
 def require_authenticated_user(request: Request) -> Tuple[Optional[sqlite3.Row], Optional[RedirectResponse]]:

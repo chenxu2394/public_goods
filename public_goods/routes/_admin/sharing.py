@@ -6,7 +6,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from ...read_models import build_export_csv
-from ...sessions import clear_whitelist, get_session, parse_whitelist_csv, rotate_session_join_token, upsert_whitelist, whitelist_template_csv
+from ..._sessions import clear_whitelist, get_session, parse_whitelist_csv, rotate_session_join_token, upsert_whitelist, whitelist_template_csv
 from ..helpers import require_management_session
 from .common import session_panel_response, share_link_page_response
 

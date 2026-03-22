@@ -9,13 +9,11 @@ from fastapi import HTTPException
 from .._auth.passwords import _hash_password_record, _legacy_hash_password
 from .._auth.usernames import _normalize_username, _validate_username
 from ..config import (
-    ADMIN_PASSWORD,
-    PASSWORD_SCHEME_LEGACY_ADMIN,
     PASSWORD_SCHEME_PBKDF2,
     USER_ROLE_ADMIN,
     USER_ROLE_TEACHER,
 )
-from ..db import _get_setting_conn, db, now_iso
+from ..db import db, now_iso
 
 
 def _create_user_conn(
@@ -112,59 +110,6 @@ def _rehash_legacy_user_password_conn(conn: sqlite3.Connection, user_id: str, en
         ),
     )
     conn.execute("DELETE FROM settings WHERE key IN ('admin_password_hash', 'password_changed_at')")
-
-
-def _ensure_bootstrap_admin(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
-    admin = conn.execute(
-        "SELECT * FROM users WHERE username_norm=?",
-        (_normalize_username("admin"),),
-    ).fetchone()
-    if admin:
-        return admin
-
-    legacy_hash = (_get_setting_conn(conn, "admin_password_hash") or "").strip()
-    if legacy_hash:
-        return _create_user_conn(
-            conn,
-            "admin",
-            USER_ROLE_ADMIN,
-            password_scheme=PASSWORD_SCHEME_LEGACY_ADMIN,
-            password_hash=legacy_hash,
-            password_salt="",
-        )
-
-    if ADMIN_PASSWORD:
-        return _create_user_conn(conn, "admin", USER_ROLE_ADMIN, password=ADMIN_PASSWORD)
-
-    return None
-
-
-def _backfill_session_owners(conn: sqlite3.Connection, admin_user_id: str) -> None:
-    conn.execute(
-        """
-        UPDATE sessions
-        SET owner_user_id=?
-        WHERE owner_user_id IS NULL OR TRIM(owner_user_id)=''
-    """,
-        (admin_user_id,),
-    )
-
-
-def _backfill_session_join_tokens(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        """
-        UPDATE sessions
-        SET join_token=id
-        WHERE join_token IS NULL OR TRIM(join_token)=''
-    """
-    )
-
-
-def _get_admin_user_conn(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
-    return conn.execute(
-        "SELECT * FROM users WHERE username_norm=?",
-        (_normalize_username("admin"),),
-    ).fetchone()
 
 
 def get_user_by_id(user_id: str) -> Optional[sqlite3.Row]:

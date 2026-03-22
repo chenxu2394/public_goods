@@ -9,7 +9,7 @@ from ..config import MAX_ACTION_POINTS
 from ..db import _run_write_with_retry, now_iso
 from ..experiment import assign_late_joiner, ensure_int, phase_for_round
 from ..read_models import build_student_status_payload
-from ..sessions import (
+from .._sessions import (
     get_session,
     get_session_by_join_token,
     get_student_by_public_id,

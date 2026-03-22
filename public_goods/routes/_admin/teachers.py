@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse
 
 from ...auth import _validate_username, generate_temp_password
 from ...config import USER_ROLE_TEACHER
-from ...sessions import _get_teacher_or_404, create_user, set_user_disabled, set_user_password
+from ..._sessions import _get_teacher_or_404, create_user, set_user_disabled, set_user_password
 from ..helpers import require_admin_user
 from .common import admin_home_response
 

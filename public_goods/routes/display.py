@@ -7,7 +7,7 @@ from ..read_models import (
     build_display_status_payload,
     build_share_link_api_payload,
 )
-from ..sessions import get_session
+from .._sessions import get_session
 from ..views import _render_share_link_page, templates
 from .helpers import require_management_session
 

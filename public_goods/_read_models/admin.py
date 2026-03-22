@@ -18,7 +18,7 @@ from ..experiment import (
     round_context,
     stage_of_session,
 )
-from ..sessions import list_sessions, list_students, list_teachers, session_counts
+from .._sessions import list_sessions, list_students, list_teachers, session_counts
 from .share import build_share_link_context
 from .types import AdminHomeContext, LoginPageContext, SessionPanelContext
 

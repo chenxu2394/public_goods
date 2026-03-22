@@ -11,7 +11,7 @@ from ...demo import (
     simulate_demo_current_round,
 )
 from ...experiment import ensure_int, open_action_stage as open_action_stage_for_session, open_round as open_round_for_session, phase_for_round, phase_label, stage_of_session
-from ...sessions import get_session
+from ..._sessions import get_session
 from ..helpers import require_management_session
 from .common import session_panel_response
 

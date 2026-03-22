@@ -28,7 +28,7 @@ def _sign(message: bytes) -> str:
 
 
 def _is_auth_configured() -> bool:
-    from .._sessions.users import get_user_by_username
+    from .._sessions import get_user_by_username
 
     return bool(SECRET_KEY) and get_user_by_username("admin") is not None
 
@@ -79,4 +79,3 @@ def verify_auth_token(token: str) -> Optional[Dict[str, Any]]:
         return payload
     except Exception:
         return None
-

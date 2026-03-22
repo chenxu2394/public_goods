@@ -11,7 +11,7 @@ from ...auth import (
 )
 from ...config import ADMIN_COOKIE_SECURE, AUTH_COOKIE_NAME, AUTH_TOKEN_TTL_SECONDS, LEGACY_ADMIN_COOKIE_NAME
 from ...db import db
-from ...sessions import _rehash_legacy_user_password_conn, get_user_by_id, get_user_by_username, set_user_password
+from ..._sessions import _rehash_legacy_user_password_conn, get_user_by_id, get_user_by_username, set_user_password
 from ..helpers import require_authenticated_user
 from .common import admin_home_response, login_page_response
 
