@@ -4,10 +4,10 @@ import sqlite3
 
 from fastapi import HTTPException
 
-from .._sessions import get_session
 from ..config import MAX_ACTION_POINTS
 from ..db import _run_write_with_retry, now_iso
-from ..experiment import ensure_int, phase_for_round
+from .._experiment import ensure_int, phase_for_round
+from .._sessions import get_session
 
 
 def submit_student_actions(session_id: str, payload: object) -> dict[str, object]:

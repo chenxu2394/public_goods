@@ -5,7 +5,7 @@ from typing import Dict
 from fastapi import HTTPException
 
 from ..db import db
-from ..experiment import (
+from .._experiment import (
     advance_round,
     close_round,
     compute_results,

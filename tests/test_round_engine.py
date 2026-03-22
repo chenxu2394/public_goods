@@ -1,3 +1,5 @@
+import importlib
+
 import pytest
 
 from tests.support import (
@@ -250,3 +252,205 @@ def test_phase_helpers_and_group_size_helpers_are_deterministic(monkeypatch, tmp
             assert min(sizes) >= app_module.MIN_GROUP_SIZE
         if total > app_module.MAX_GROUP_SIZE:
             assert max(sizes) <= app_module.MAX_GROUP_SIZE
+
+
+def test_phase_status_and_student_report_helpers_preserve_seeded_results(monkeypatch, tmp_path):
+    app_module, _ = load_initialized_app(monkeypatch, tmp_path)
+    experiment_internal = importlib.import_module("public_goods._experiment")
+    session_id = "report-helper-session"
+
+    insert_session(app_module, session_id, rounds=25)
+    insert_students(
+        app_module,
+        session_id,
+        [
+            ("stu-alpha", "20260001", "Alice", "A2", 1, 1),
+            ("stu-beta", "20260002", "Bob", "B3", 1, 2),
+            ("stu-gamma", "20260003", "Cara", "C4", 2, 1),
+            ("stu-delta", "20260004", "Dan", "D5", 2, 2),
+        ],
+    )
+    student_rows = get_student_rows(app_module, session_id)
+    internal_ids = {student_id: str(row["id"]) for student_id, row in student_rows.items()}
+
+    insert_results(
+        app_module,
+        session_id,
+        1,
+        [
+            (internal_ids["20260001"], 1, 2, 7, 5.25, 3, "baseline", 1, 0, 0, 0.0, 0.0, 12.25, 12.25, 12.25),
+            (internal_ids["20260002"], 1, 2, 7, 5.25, 4, "baseline", 1, 0, 0, 0.0, 0.0, 11.25, 11.25, 11.25),
+            (internal_ids["20260003"], 2, 2, 3, 2.25, 1, "baseline", 1, 0, 0, 0.0, 0.0, 11.25, 11.25, 11.25),
+            (internal_ids["20260004"], 2, 2, 3, 2.25, 2, "baseline", 1, 0, 0, 0.0, 0.0, 10.25, 10.25, 10.25),
+        ],
+    )
+    insert_results(
+        app_module,
+        session_id,
+        2,
+        [
+            (internal_ids["20260001"], 1, 2, 7, 5.25, 2, "baseline", 2, 0, 0, 0.0, 0.0, 13.25, 25.5, 25.5),
+            (internal_ids["20260002"], 1, 2, 7, 5.25, 5, "baseline", 2, 0, 0, 0.0, 0.0, 10.25, 21.5, 21.5),
+            (internal_ids["20260003"], 2, 2, 6, 4.5, 3, "baseline", 2, 0, 0, 0.0, 0.0, 11.5, 22.75, 22.75),
+            (internal_ids["20260004"], 2, 2, 6, 4.5, 3, "baseline", 2, 0, 0, 0.0, 0.0, 11.5, 21.75, 21.75),
+        ],
+    )
+    insert_results(
+        app_module,
+        session_id,
+        11,
+        [
+            (internal_ids["20260001"], 1, 2, 8, 6.0, 4, "reward", 1, 2, 0, 2.0, 0.0, 10.0, 35.5, 10.0),
+            (internal_ids["20260002"], 1, 2, 8, 6.0, 4, "reward", 1, 0, 2, 0.0, 4.0, 16.0, 37.5, 16.0),
+            (internal_ids["20260003"], 2, 2, 5, 3.75, 2, "reward", 1, 1, 0, 1.0, 0.0, 10.75, 33.5, 10.75),
+            (internal_ids["20260004"], 2, 2, 5, 3.75, 3, "reward", 1, 0, 1, 0.0, 2.0, 12.75, 34.5, 12.75),
+        ],
+    )
+
+    conn = app_module.db()
+    try:
+        counts = experiment_internal.phase_computed_counts_conn(conn, session_id)
+        statuses = experiment_internal.build_phase_status(25, counts)
+        report = experiment_internal.build_student_phase_report_conn(
+            conn,
+            session_id,
+            internal_ids["20260001"],
+            "baseline",
+        )
+    finally:
+        conn.close()
+
+    assert experiment_internal.count_computed_rounds(session_id) == 3
+    assert counts == {"baseline": 2, "reward": 1, "punishment": 0}
+    assert statuses == [
+        {
+            "phase": "baseline",
+            "phase_label": "Baseline",
+            "total_rounds": 10,
+            "computed_rounds": 2,
+            "completed": False,
+        },
+        {
+            "phase": "reward",
+            "phase_label": "Reward",
+            "total_rounds": 10,
+            "computed_rounds": 1,
+            "completed": False,
+        },
+        {
+            "phase": "punishment",
+            "phase_label": "Punishment",
+            "total_rounds": 5,
+            "computed_rounds": 0,
+            "completed": False,
+        },
+    ]
+
+    assert report is not None
+    assert report["phase"] == "baseline"
+    assert report["group_no"] == 1
+    assert report["group_n"] == 2
+    assert report["student_summary"] == {
+        "total_contrib": 5,
+        "total_income": pytest.approx(25.5),
+        "action_sent": 0,
+        "action_received": 0,
+        "final_phase_cumulative": pytest.approx(25.5),
+    }
+    assert report["group_summary"] == {
+        "total_contrib": 14,
+        "total_income": pytest.approx(47.0),
+        "avg_contrib": pytest.approx(3.5),
+    }
+    assert report["student_rows"] == [
+        {
+            "round": 1,
+            "phase_round": 1,
+            "contrib": 3,
+            "action_sent": 0,
+            "action_received": 0,
+            "action_cost": pytest.approx(0.0),
+            "action_effect": pytest.approx(0.0),
+            "income": pytest.approx(12.25),
+            "phase_cumulative": pytest.approx(12.25),
+            "computed_at": "2026-03-08T12:01:00",
+        },
+        {
+            "round": 2,
+            "phase_round": 2,
+            "contrib": 2,
+            "action_sent": 0,
+            "action_received": 0,
+            "action_cost": pytest.approx(0.0),
+            "action_effect": pytest.approx(0.0),
+            "income": pytest.approx(13.25),
+            "phase_cumulative": pytest.approx(25.5),
+            "computed_at": "2026-03-08T12:01:00",
+        },
+    ]
+
+
+def test_current_round_progress_preserves_group_order_and_counts(monkeypatch, tmp_path):
+    app_module, _ = load_initialized_app(monkeypatch, tmp_path)
+    experiment_internal = importlib.import_module("public_goods._experiment")
+    session_id = "progress-helper-session"
+
+    insert_session(app_module, session_id, locked=1, current_round=11, round_open=1, action_open=1)
+    insert_students(
+        app_module,
+        session_id,
+        [
+            ("stu-alpha", "20260001", "Alice", "A2", 1, 1),
+            ("stu-beta", "20260002", "Bob", "B3", 1, 2),
+            ("stu-gamma", "20260003", "Cara", "C4", 2, 1),
+            ("stu-delta", "20260004", "Dan", "D5", 2, 2),
+        ],
+    )
+    student_rows = get_student_rows(app_module, session_id)
+    internal_ids = {student_id: str(row["id"]) for student_id, row in student_rows.items()}
+
+    insert_contributions(
+        app_module,
+        session_id,
+        11,
+        {
+            internal_ids["20260001"]: 4,
+            internal_ids["20260003"]: 2,
+            internal_ids["20260004"]: 3,
+        },
+    )
+    insert_actions(
+        app_module,
+        session_id,
+        11,
+        [
+            (internal_ids["20260001"], internal_ids["20260002"], 2),
+            (internal_ids["20260003"], internal_ids["20260004"], 1),
+        ],
+    )
+
+    conn = app_module.db()
+    try:
+        progress = experiment_internal.current_round_progress_conn(conn, session_id, 11)
+    finally:
+        conn.close()
+
+    assert progress == {
+        "student_total": 4,
+        "contrib_submitted": 3,
+        "action_submitted": 2,
+        "groups": [
+            {
+                "group_no": 1,
+                "student_total": 2,
+                "contrib_submitted": 1,
+                "action_submitted": 1,
+            },
+            {
+                "group_no": 2,
+                "student_total": 2,
+                "contrib_submitted": 2,
+                "action_submitted": 1,
+            },
+        ],
+    }

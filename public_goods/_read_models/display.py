@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..db import db
-from ..experiment import phase_for_round, stage_of_session
+from .._experiment import phase_for_round, stage_of_session
 from .._sessions import get_session
 from .types import DisplayStatusPayload
 

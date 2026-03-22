@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import HTTPException
 
 from ..db import db, now_iso
-from ..experiment import phase_for_round
+from .._experiment import phase_for_round
 from .utils import _demo_profile_for_student, _stable_int
 
 

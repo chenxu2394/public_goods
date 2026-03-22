@@ -5,7 +5,7 @@ import io
 from typing import Tuple
 
 from ..db import db
-from ..experiment import phase_for_round
+from .._experiment import phase_for_round
 
 
 def build_export_csv(session_id: str, rounds: int) -> Tuple[str, bytes]:

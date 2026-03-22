@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from ..config import DEFAULT_GROUP_SIZE
 from ..db import _generate_anonymous_id, db
-from ..experiment import lock_groups
+from .._experiment import lock_groups
 from .utils import _demo_student_rows
 
 

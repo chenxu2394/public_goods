@@ -7,7 +7,7 @@ from fastapi import Request
 from ..auth import _auth_configuration_error, _is_auth_configured
 from ..config import DEMO_DEFAULT_STUDENT_COUNT, DEMO_MAX_STUDENT_COUNT, PUBLIC_BASE_URL, USER_ROLE_ADMIN
 from ..db import db
-from ..experiment import (
+from .._experiment import (
     build_phase_status,
     build_teacher_phase_reports_conn,
     count_computed_rounds,

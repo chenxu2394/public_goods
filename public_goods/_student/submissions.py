@@ -4,9 +4,9 @@ import sqlite3
 
 from fastapi import HTTPException
 
+from .._experiment import ensure_int
 from .._sessions import get_session
 from ..db import _run_write_with_retry, now_iso
-from ..experiment import ensure_int
 
 
 def submit_student_contribution(session_id: str, student_id: str, contrib: str) -> dict[str, object]:

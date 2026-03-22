@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
+from .._experiment import assign_late_joiner
 from .._sessions import get_session_by_join_token, upsert_joined_student, whitelist_check_or_raise
-from ..experiment import assign_late_joiner
 
 
 def submit_student_join(join_token: str, student_id: str, name: str) -> tuple[str, str]:

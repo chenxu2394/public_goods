@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import HTTPException
 
 from ..db import db
-from ..experiment import (
+from .._experiment import (
     build_phase_status,
     build_student_phase_report_conn,
     phase_computed_counts_conn,
