@@ -6,7 +6,8 @@ from typing import List, Optional
 
 from fastapi import HTTPException
 
-from ..auth import _hash_password_record, _legacy_hash_password, _normalize_username, _validate_username
+from .._auth.passwords import _hash_password_record, _legacy_hash_password
+from .._auth.usernames import _normalize_username, _validate_username
 from ..config import (
     ADMIN_PASSWORD,
     PASSWORD_SCHEME_LEGACY_ADMIN,

@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 
 def _legacy_hash(secret_key: str, password: str) -> str:
@@ -509,6 +510,59 @@ def test_admin_bootstrap_from_env_password(monkeypatch, tmp_path: Path):
     assert admin is not None
     assert admin["role"] == app_module.USER_ROLE_ADMIN
     assert admin["password_scheme"] == app_module.PASSWORD_SCHEME_PBKDF2
+
+
+def test_get_current_user_caches_request_state(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="cache-secret",
+    )
+    app_module.init_db()
+
+    import public_goods._sessions.users as users_module
+    import public_goods.auth as auth_module
+
+    user = app_module.get_user_by_username("admin")
+    assert user is not None
+    token = auth_module.make_auth_token(user)
+
+    request = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/admin",
+            "raw_path": b"/admin",
+            "query_string": b"",
+            "headers": [(b"cookie", f"{app_module.AUTH_COOKIE_NAME}={token}".encode("latin-1"))],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+        }
+    )
+
+    calls = 0
+    original_get_user_by_id = users_module.get_user_by_id
+
+    def counting_get_user_by_id(user_id: str):
+        nonlocal calls
+        calls += 1
+        return original_get_user_by_id(user_id)
+
+    monkeypatch.setattr(users_module, "get_user_by_id", counting_get_user_by_id)
+
+    first = auth_module.get_current_user(request)
+    second = auth_module.get_current_user(request)
+
+    assert first is not None
+    assert second is not None
+    assert str(first["id"]) == str(user["id"])
+    assert str(second["id"]) == str(user["id"])
+    assert calls == 1
+    assert request.state._auth_loaded is True
+    assert str(request.state._auth_user["id"]) == str(user["id"])
 
 
 def test_legacy_admin_hash_is_rehashed_on_login(monkeypatch, tmp_path: Path):
