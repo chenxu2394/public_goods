@@ -99,6 +99,11 @@
 <script>
 const sessionId = "{{ sess.id }}";
 const studentId = "{{ stu.student_id }}";
+let contribContextKey = null;
+let contribDraftDirty = false;
+let actionContextKey = null;
+let actionDraftValues = {};
+let actionDraftDirty = new Set();
 
 function stageText(stage){
   if(stage === "contribution") return "Contribution Open / 贡献阶段开放";
@@ -159,21 +164,57 @@ function renderGroupView(visible, groupView){
   });
 }
 
+function actionTargetsKey(data){
+  const targetIds = data.action_targets.map(target => target.anonymous_id).join("|");
+  return `${data.session.current_round}:${data.session.phase}:${data.session.stage}:${targetIds}`;
+}
+
+function resetActionDrafts(){
+  actionDraftValues = {};
+  actionDraftDirty = new Set();
+}
+
+function renderContributionStatus(data){
+  const msg = document.getElementById("submit_msg");
+  const contribInput = document.getElementById("contrib");
+  const roundKey = String(data.current_round.round);
+  const submittedContrib = data.current_round.submitted_contrib;
+  const hasSubmitted = submittedContrib !== null;
+
+  if(contribContextKey !== roundKey){
+    contribContextKey = roundKey;
+    contribDraftDirty = false;
+    contribInput.value = hasSubmitted ? submittedContrib : 0;
+  }else if(hasSubmitted && !contribDraftDirty && document.activeElement !== contribInput){
+    contribInput.value = submittedContrib;
+  }
+
+  if(hasSubmitted){
+    msg.innerText = `Submitted contribution / 已提交贡献: ${submittedContrib}`;
+  } else {
+    msg.innerText = data.session.stage === "contribution" ? "Not submitted yet / 尚未提交" : "Contribution stage closed / 贡献阶段已关闭";
+  }
+}
+
 function renderActionTargets(data){
   const wrap = document.getElementById("action_wrap");
   const table = document.getElementById("action_table");
   const title = document.getElementById("action_title");
   const desc = document.getElementById("action_desc");
 
-  while(table.rows.length > 1) table.deleteRow(1);
-
   const showAction = data.session.stage === "action" && (data.session.phase === "reward" || data.session.phase === "punishment");
   if(!showAction){
     wrap.style.display = "none";
+    while(table.rows.length > 1) table.deleteRow(1);
+    actionContextKey = null;
+    resetActionDrafts();
     return;
   }
 
   wrap.style.display = "block";
+  const nextActionContextKey = actionTargetsKey(data);
+  const shouldRebuildTargets = actionContextKey !== nextActionContextKey;
+
   if(data.session.phase === "reward"){
     title.innerText = "Reward Stage / 奖励阶段";
     desc.innerText = "Each reward point costs you 1 and gives the target +2 income. Range: 0-5 for each target. / 每给予某位组员1点奖励，你支付1点成本，对方增加2点收益。每位目标范围为0-5点。";
@@ -182,7 +223,21 @@ function renderActionTargets(data){
     desc.innerText = "Each punishment point costs you 1 and reduces the target by 3. Range: 0-5 for each target. / 每给予某位组员1点惩罚，你支付1点成本，对方减少3点收益。每位目标范围为0-5点。";
   }
 
-  data.action_targets.forEach(target => {
+  if(shouldRebuildTargets){
+    while(table.rows.length > 1) table.deleteRow(1);
+    actionContextKey = nextActionContextKey;
+    resetActionDrafts();
+  }
+
+  data.action_targets.forEach((target, index) => {
+    if(!shouldRebuildTargets){
+      const inp = table.rows[index + 1]?.querySelector("input[data-anon]");
+      if(inp && !actionDraftDirty.has(target.anonymous_id) && document.activeElement !== inp){
+        inp.value = target.points;
+      }
+      return;
+    }
+
     const tr = table.insertRow(-1);
     tr.insertCell(-1).innerText = target.anonymous_id;
     const td = tr.insertCell(-1);
@@ -190,8 +245,12 @@ function renderActionTargets(data){
     inp.type = "number";
     inp.min = "0";
     inp.max = "5";
-    inp.value = target.points;
     inp.dataset.anon = target.anonymous_id;
+    inp.value = actionDraftDirty.has(target.anonymous_id) ? actionDraftValues[target.anonymous_id] : target.points;
+    inp.addEventListener("input", () => {
+      actionDraftDirty.add(target.anonymous_id);
+      actionDraftValues[target.anonymous_id] = inp.value;
+    });
     td.appendChild(inp);
   });
 
@@ -289,13 +348,7 @@ async function fetchStatus(){
   renderPhaseStatuses(data.phase_statuses);
   renderCurrentPhase(data.current_phase);
 
-  const msg = document.getElementById("submit_msg");
-  if(data.current_round.submitted_contrib !== null){
-    msg.innerText = `Submitted contribution / 已提交贡献: ${data.current_round.submitted_contrib}`;
-    document.getElementById("contrib").value = data.current_round.submitted_contrib;
-  } else {
-    msg.innerText = data.session.stage === "contribution" ? "Not submitted yet / 尚未提交" : "Contribution stage closed / 贡献阶段已关闭";
-  }
+  renderContributionStatus(data);
 
   const contribInput = document.getElementById("contrib");
   const contribBtn = document.getElementById("contrib_submit_btn");
@@ -315,6 +368,7 @@ document.getElementById("submit_form").addEventListener("submit", async (e) => {
   const msg = document.getElementById("submit_msg");
   if(res.ok){
     const data = await res.json();
+    contribDraftDirty = false;
     msg.innerText = `Submitted contribution / 已提交贡献: ${data.contrib}`;
   } else {
     const t = await res.text();
@@ -339,12 +393,17 @@ document.getElementById("action_form").addEventListener("submit", async (e) => {
 
   const msg = document.getElementById("action_msg");
   if(res.ok){
+    resetActionDrafts();
     msg.innerText = "Action submission saved. / 操作提交已保存。";
   } else {
     const t = await res.text();
     msg.innerText = `Submit failed / 提交失败: ${t}`;
   }
   await fetchStatus();
+});
+
+document.getElementById("contrib").addEventListener("input", () => {
+  contribDraftDirty = true;
 });
 
 fetchStatus();
