@@ -1736,6 +1736,12 @@ def test_phase_cumulative_resets_and_completed_phase_reports_are_retained(monkey
         payload = status.json()
 
         assert payload["current_phase"]["phase"] == "reward"
+        assert payload["current_phase"]["latest_round"] == 11
+        assert payload["current_phase"]["latest_phase_round"] == 1
+        assert payload["current_phase"]["student_latest_income"] == 10.0
+        assert payload["current_phase"]["student_latest_contrib"] == 1
+        assert payload["current_phase"]["group_latest_income"] == 35.0
+        assert payload["current_phase"]["group_latest_contrib"] == 6
         assert payload["current_phase"]["student_phase_cumulative"] == 10.0
         assert payload["current_phase"]["group_phase_cumulative"] == 35.0
         assert [phase["phase"] for phase in payload["completed_phases"]] == ["baseline"]

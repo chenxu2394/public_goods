@@ -40,6 +40,28 @@
       <div><b id="group_total_contrib">0</b></div>
     </div>
   </div>
+  <div class="muted" style="margin-top:12px;">
+    Most recent completed round / 最近完成轮次:
+    <b id="latest_round_summary">-</b>
+  </div>
+  <div class="row" style="margin-top:8px;">
+    <div class="col">
+      <div class="muted">Your latest round income / 你的最近一轮收益</div>
+      <div><b id="student_latest_income">0.00</b></div>
+    </div>
+    <div class="col">
+      <div class="muted">Your latest round contribution / 你的最近一轮贡献</div>
+      <div><b id="student_latest_contrib">0</b></div>
+    </div>
+    <div class="col">
+      <div class="muted">Group latest round income / 小组最近一轮收益</div>
+      <div><b id="group_latest_income">0.00</b></div>
+    </div>
+    <div class="col">
+      <div class="muted">Group latest round contribution / 小组最近一轮贡献</div>
+      <div><b id="group_latest_contrib">0</b></div>
+    </div>
+  </div>
   <div style="margin-top:10px;">
     <span class="muted">Phase completion / 情境完成情况:</span>
     <span id="phase_statuses"></span>
@@ -140,6 +162,11 @@ function renderPhaseStatuses(statuses){
 
 function renderCurrentPhase(summary){
   document.getElementById("phase_progress").innerText = `${summary.computed_rounds} / ${summary.total_rounds}`;
+  document.getElementById("latest_round_summary").innerText = summary.latest_round === null ? "-" : `${summary.latest_round} / ${summary.latest_phase_round}`;
+  document.getElementById("student_latest_income").innerText = summary.student_latest_income.toFixed(2);
+  document.getElementById("student_latest_contrib").innerText = summary.student_latest_contrib;
+  document.getElementById("group_latest_income").innerText = summary.group_latest_income.toFixed(2);
+  document.getElementById("group_latest_contrib").innerText = summary.group_latest_contrib;
   document.getElementById("student_phase_cumulative").innerText = summary.student_phase_cumulative.toFixed(2);
   document.getElementById("student_total_contrib").innerText = summary.student_total_contrib;
   document.getElementById("group_phase_cumulative").innerText = summary.group_phase_cumulative.toFixed(2);

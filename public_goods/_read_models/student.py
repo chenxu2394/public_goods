@@ -97,6 +97,12 @@ def build_student_status_payload(session_id: str, student_id: str) -> StudentSta
         "phase_round": phase_round,
         "computed_rounds": int(computed_counts.get(phase, 0)),
         "total_rounds": phase_round_count_for_session(total_rounds, phase),
+        "latest_round": None,
+        "latest_phase_round": None,
+        "student_latest_income": 0.0,
+        "student_latest_contrib": 0,
+        "group_latest_income": 0.0,
+        "group_latest_contrib": 0,
         "student_phase_cumulative": 0.0,
         "student_total_contrib": 0,
         "group_no": int(stu["group_no"]) if stu["group_no"] is not None else None,
@@ -104,9 +110,24 @@ def build_student_status_payload(session_id: str, student_id: str) -> StudentSta
         "group_total_contrib": 0,
     }
     if current_phase_report is not None:
+        latest_student_round = current_phase_report["student_rows"][-1]
+        latest_group_round = next(
+            (
+                row
+                for row in current_phase_report["group_rows"]
+                if row["round"] == latest_student_round["round"]
+            ),
+            None,
+        )
         current_phase_summary.update(
             {
                 "phase_label": current_phase_report["phase_label"],
+                "latest_round": int(latest_student_round["round"]),
+                "latest_phase_round": int(latest_student_round["phase_round"]),
+                "student_latest_income": float(latest_student_round["income"]),
+                "student_latest_contrib": int(latest_student_round["contrib"]),
+                "group_latest_income": float(latest_group_round["group_income"]) if latest_group_round else 0.0,
+                "group_latest_contrib": int(latest_group_round["group_total"]) if latest_group_round else 0,
                 "student_phase_cumulative": float(current_phase_report["student_summary"]["final_phase_cumulative"]),
                 "student_total_contrib": int(current_phase_report["student_summary"]["total_contrib"]),
                 "group_no": int(current_phase_report["group_no"]),
