@@ -126,6 +126,8 @@ let contribDraftDirty = false;
 let actionContextKey = null;
 let actionDraftValues = {};
 let actionDraftDirty = new Set();
+let statusRefreshPromise = null;
+let submitInFlight = false;
 
 function stageText(stage){
   if(stage === "contribution") return "Contribution Open / 贡献阶段开放";
@@ -281,7 +283,7 @@ function renderActionTargets(data){
     td.appendChild(inp);
   });
 
-  document.getElementById("action_submit_btn").disabled = false;
+  document.getElementById("action_submit_btn").disabled = submitInFlight;
 }
 
 function renderCompletedPhases(phases){
@@ -381,59 +383,102 @@ async function fetchStatus(){
   const contribBtn = document.getElementById("contrib_submit_btn");
   const canContrib = data.session.stage === "contribution";
   contribInput.disabled = !canContrib;
-  contribBtn.disabled = !canContrib;
+  contribBtn.disabled = !canContrib || submitInFlight;
 
   renderGroupView(data.current_round.group_view_visible, data.group_view);
   renderActionTargets(data);
   renderCompletedPhases(data.completed_phases);
 }
 
+async function refreshStatus(){
+  if(statusRefreshPromise) return statusRefreshPromise;
+  statusRefreshPromise = fetchStatus().finally(() => {
+    statusRefreshPromise = null;
+  });
+  return statusRefreshPromise;
+}
+
+async function refreshStatusAfterSubmit(){
+  if(statusRefreshPromise){
+    try {
+      await statusRefreshPromise;
+    } catch {
+      // A submit completion should still attempt a fresh status read.
+    }
+  }
+  await refreshStatus();
+}
+
 document.getElementById("submit_form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const fd = new FormData(e.target);
-  const res = await fetch(`/api/${sessionId}/submit`, {method:"POST", body: fd});
+  if(submitInFlight) return;
+
   const msg = document.getElementById("submit_msg");
-  if(res.ok){
-    const data = await res.json();
-    contribDraftDirty = false;
-    msg.innerText = `Submitted contribution / 已提交贡献: ${data.contrib}`;
-  } else {
-    const t = await res.text();
-    msg.innerText = `Submit failed / 提交失败: ${t}`;
+  const contribBtn = document.getElementById("contrib_submit_btn");
+  submitInFlight = true;
+  contribBtn.disabled = true;
+  try {
+    const fd = new FormData(e.target);
+    const res = await fetch(`/api/${sessionId}/submit`, {method:"POST", body: fd});
+    if(res.ok){
+      const data = await res.json();
+      contribDraftDirty = false;
+      msg.innerText = `Submitted contribution / 已提交贡献: ${data.contrib}`;
+    } else {
+      const t = await res.text();
+      msg.innerText = `Submit failed / 提交失败: ${t}`;
+    }
+  } finally {
+    submitInFlight = false;
+    await refreshStatusAfterSubmit();
   }
-  await fetchStatus();
 });
 
 document.getElementById("action_form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const inputs = Array.from(document.querySelectorAll("#action_table input[data-anon]"));
-  const allocations = {};
-  inputs.forEach(inp => {
-    allocations[inp.dataset.anon] = Number(inp.value || 0);
-  });
-
-  const res = await fetch(`/api/${sessionId}/submit_actions`, {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({student_id: studentId, allocations})
-  });
+  if(submitInFlight) return;
 
   const msg = document.getElementById("action_msg");
-  if(res.ok){
-    resetActionDrafts();
-    msg.innerText = "Action submission saved. / 操作提交已保存。";
-  } else {
-    const t = await res.text();
-    msg.innerText = `Submit failed / 提交失败: ${t}`;
+  const actionBtn = document.getElementById("action_submit_btn");
+  submitInFlight = true;
+  actionBtn.disabled = true;
+  try {
+    const inputs = Array.from(document.querySelectorAll("#action_table input[data-anon]"));
+    const allocations = {};
+    inputs.forEach(inp => {
+      allocations[inp.dataset.anon] = Number(inp.value || 0);
+    });
+
+    const res = await fetch(`/api/${sessionId}/submit_actions`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({student_id: studentId, allocations})
+    });
+
+    if(res.ok){
+      resetActionDrafts();
+      msg.innerText = "Action submission saved. / 操作提交已保存。";
+    } else {
+      const t = await res.text();
+      msg.innerText = `Submit failed / 提交失败: ${t}`;
+    }
+  } finally {
+    submitInFlight = false;
+    await refreshStatusAfterSubmit();
   }
-  await fetchStatus();
 });
 
 document.getElementById("contrib").addEventListener("input", () => {
   contribDraftDirty = true;
 });
 
-fetchStatus();
-setInterval(fetchStatus, 2000);
+refreshStatus();
+async function pollStatus(){
+  if(!submitInFlight){
+    await refreshStatus();
+  }
+  setTimeout(pollStatus, 2000);
+}
+setTimeout(pollStatus, 2000);
 </script>
 {% endblock %}

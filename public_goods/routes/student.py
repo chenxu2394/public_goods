@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 
 from .._student import (
     submit_student_actions,
@@ -56,7 +57,7 @@ def api_submit(session_id: str, student_id: str = Form(...), contrib: str = Form
 @router.post("/api/{session_id}/submit_actions")
 async def api_submit_actions(session_id: str, request: Request):
     payload = await request.json()
-    return submit_student_actions(session_id, payload)
+    return await run_in_threadpool(submit_student_actions, session_id, payload)
 
 
 @router.get("/api/{session_id}/status")
