@@ -53,6 +53,26 @@ PUBLIC_GOODS_DB_PATH='./public_goods.db' \
 uv run uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
+## Local checks
+
+After cloning the repo, or after pulling dependency changes:
+
+```bash
+uv sync
+```
+
+Before pushing changes:
+
+```bash
+./scripts/check.sh
+```
+
+To run only the template linter:
+
+```bash
+./scripts/lint.sh
+```
+
 ## Container startup command
 
 `uv run --no-sync uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}`
@@ -139,6 +159,18 @@ Trigger:
 
 - Push to `main` (ignore `*.md` and `scripts/**`)
 - Manual run (`workflow_dispatch`)
+
+## GitHub CI
+
+Workflow file:
+
+- `.github/workflows/ci.yml`
+
+The CI workflow runs on pull requests, pushes to `main`, and manual dispatch. It installs dependencies with `uv sync --frozen`, then runs the same checks as local development:
+
+```bash
+bash scripts/check.sh
+```
 
 ## One-command Azure setup (CLI)
 

@@ -14,6 +14,11 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+  "djlint>=1.39.2",
   "httpx==0.27.2",
   "pytest==8.3.5",
 ]
+
+[tool.djlint]
+profile = "jinja"
+ignore = "H006,H021,H023,H030,H031,J018,T003,T028"
