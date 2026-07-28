@@ -12,6 +12,10 @@ def create_schema(conn: sqlite3.Connection) -> None:
         id TEXT PRIMARY KEY,
         username TEXT NOT NULL,
         username_norm TEXT NOT NULL,
+        email TEXT,
+        email_norm TEXT,
+        identity_provider TEXT,
+        identity_subject TEXT,
         role TEXT NOT NULL,
         password_scheme TEXT NOT NULL,
         password_hash TEXT NOT NULL,
@@ -144,3 +148,19 @@ def create_schema(conn: sqlite3.Connection) -> None:
 def create_session_join_token_index(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_join_token ON sessions(join_token)")
 
+
+def create_user_identity_indexes(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_norm
+        ON users(email_norm)
+        WHERE email_norm IS NOT NULL
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_users_external_identity
+        ON users(identity_provider, identity_subject)
+        WHERE identity_provider IS NOT NULL AND identity_subject IS NOT NULL
+        """
+    )

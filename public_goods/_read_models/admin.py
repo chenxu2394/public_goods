@@ -5,7 +5,14 @@ import sqlite3
 from fastapi import Request
 
 from ..auth import _auth_configuration_error, _is_auth_configured
-from ..config import DEMO_DEFAULT_STUDENT_COUNT, DEMO_MAX_STUDENT_COUNT, PUBLIC_BASE_URL, USER_ROLE_ADMIN
+from ..config import (
+    AUTH_MODE,
+    AUTH_MODE_EASY_AUTH,
+    DEMO_DEFAULT_STUDENT_COUNT,
+    DEMO_MAX_STUDENT_COUNT,
+    PUBLIC_BASE_URL,
+    USER_ROLE_ADMIN,
+)
 from ..db import db
 from .._experiment import (
     build_phase_status,
@@ -29,6 +36,7 @@ def build_login_page_context(request: Request, **extra: object) -> LoginPageCont
         "configured": _is_auth_configured(),
         "configuration_error": _auth_configuration_error(),
         "pw_changed": request.query_params.get("pw_changed") == "1",
+        "easy_auth": AUTH_MODE == AUTH_MODE_EASY_AUTH,
     }
     context.update(extra)
     return context
@@ -36,13 +44,15 @@ def build_login_page_context(request: Request, **extra: object) -> LoginPageCont
 
 def build_admin_home_context(request: Request, user: sqlite3.Row, **extra: object) -> AdminHomeContext:
     is_admin = user["role"] == USER_ROLE_ADMIN
-    must_change_password = int(user["must_change_password"]) == 1
+    easy_auth = AUTH_MODE == AUTH_MODE_EASY_AUTH
+    must_change_password = not easy_auth and int(user["must_change_password"]) == 1
     context: AdminHomeContext = {
         "request": request,
         "user": user,
         "is_admin": is_admin,
         "must_change_password": must_change_password,
         "pw_change_required": must_change_password or request.query_params.get("pw_change_required") == "1",
+        "easy_auth": easy_auth,
         "sessions": list_sessions() if is_admin else list_sessions(str(user["id"])),
         "teachers": list_teachers() if is_admin else [],
     }

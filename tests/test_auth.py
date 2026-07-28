@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import importlib
+import json
 import re
 import sqlite3
 import sys
@@ -20,12 +21,22 @@ def _legacy_hash(secret_key: str, password: str) -> str:
     return base64.urlsafe_b64encode(dk).decode("utf-8").rstrip("=")
 
 
-def _load_app(monkeypatch, tmp_path: Path, *, admin_password: str | None, secret_key: str, seed_db=None):
+def _load_app(
+    monkeypatch,
+    tmp_path: Path,
+    *,
+    admin_password: str | None,
+    secret_key: str,
+    seed_db=None,
+    auth_mode: str = "password",
+    admin_email: str | None = None,
+):
     db_path = tmp_path / "public_goods.db"
     if seed_db is not None:
         seed_db(db_path, secret_key)
 
     monkeypatch.setenv("PUBLIC_GOODS_DB_PATH", str(db_path))
+    monkeypatch.setenv("AUTH_MODE", auth_mode)
     monkeypatch.setenv("SECRET_KEY", secret_key)
     monkeypatch.setenv("ADMIN_COOKIE_SECURE", "0")
     monkeypatch.setenv("PUBLIC_BASE_URL", "http://testserver")
@@ -33,11 +44,27 @@ def _load_app(monkeypatch, tmp_path: Path, *, admin_password: str | None, secret
         monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
     else:
         monkeypatch.setenv("ADMIN_PASSWORD", admin_password)
+    if admin_email is None:
+        monkeypatch.delenv("ADMIN_EMAIL", raising=False)
+    else:
+        monkeypatch.setenv("ADMIN_EMAIL", admin_email)
 
     sys.modules.pop("app", None)
     import app as app_module
 
     return importlib.reload(app_module), db_path
+
+
+def _easy_auth_headers(subject: str, email: str) -> dict[str, str]:
+    principal = {
+        "auth_typ": "aad",
+        "claims": [
+            {"typ": "oid", "val": subject},
+            {"typ": "email", "val": email},
+        ],
+    }
+    encoded = base64.b64encode(json.dumps(principal).encode("utf-8")).decode("ascii")
+    return {"X-MS-CLIENT-PRINCIPAL": encoded}
 
 
 def _login(client: TestClient, username: str, password: str):
@@ -491,6 +518,167 @@ def _seed_legacy_session_db(db_path: Path, _secret_key: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def test_easy_auth_bootstraps_admin_and_binds_microsoft_identity(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password=None,
+        secret_key="",
+        auth_mode="easy_auth",
+        admin_email="Admin@example.com",
+    )
+
+    with TestClient(app_module.app) as client:
+        unauthenticated = client.get("/admin", follow_redirects=False)
+        assert unauthenticated.status_code == 303
+        assert unauthenticated.headers["location"] == "/admin/login"
+
+        login_page = client.get("/admin/login")
+        assert login_page.status_code == 200
+        assert "Continue with Microsoft" in login_page.text
+
+        login_redirect = client.get("/admin/login/microsoft", follow_redirects=False)
+        assert login_redirect.status_code == 303
+        assert login_redirect.headers["location"] == "/.auth/login/aad?post_login_redirect_uri=/admin"
+
+        headers = _easy_auth_headers("admin-microsoft-id", "admin@example.com")
+        admin_home = client.get("/admin", headers=headers)
+        assert admin_home.status_code == 200
+        assert "admin@example.com" in admin_home.text
+
+        logout = client.post("/admin/logout", headers=headers, follow_redirects=False)
+        assert logout.status_code == 303
+        assert logout.headers["location"] == "/.auth/logout?post_logout_redirect_uri=/admin/login"
+
+    admin = app_module.get_user_by_username("admin")
+    assert admin is not None
+    assert admin["email_norm"] == "admin@example.com"
+    assert admin["identity_provider"] == "aad"
+    assert admin["identity_subject"] == "admin-microsoft-id"
+
+
+def test_easy_auth_does_not_bootstrap_admin_without_configured_email(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="",
+        secret_key="",
+        auth_mode="easy_auth",
+        admin_email="",
+    )
+
+    with TestClient(app_module.app):
+        pass
+
+    assert app_module.get_user_by_username("admin") is None
+
+
+def test_easy_auth_allows_only_preapproved_teacher_accounts(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password=None,
+        secret_key="",
+        auth_mode="easy_auth",
+        admin_email="admin@example.com",
+    )
+    admin_headers = _easy_auth_headers("admin-id", "admin@example.com")
+    teacher_headers = _easy_auth_headers("teacher-id", "teacher@example.com")
+    unknown_headers = _easy_auth_headers("unknown-id", "unknown@example.com")
+
+    with TestClient(app_module.app) as client:
+        response = client.post(
+            "/admin/teachers",
+            data={"email": "Teacher@example.com"},
+            headers=admin_headers,
+        )
+        assert response.status_code == 200
+        assert "Approved teacher Microsoft account" in response.text
+        assert "Awaiting first sign-in" in response.text
+
+        unknown = client.get("/admin/login", headers=unknown_headers)
+        assert unknown.status_code == 403
+        assert "has not been approved" in unknown.text
+
+        teacher_home = client.get("/admin", headers=teacher_headers)
+        assert teacher_home.status_code == 200
+        assert "Teacher access" in teacher_home.text
+
+        session_id = _create_session_with_headers(client, teacher_headers, "Teacher Session")
+        assert app_module.get_session(session_id)["owner_username"] == "Teacher@example.com"
+
+        teacher = app_module.get_user_by_email("teacher@example.com")
+        assert teacher is not None
+        assert teacher["identity_subject"] == "teacher-id"
+
+        client.post(
+            f"/admin/teachers/{teacher['id']}/disable",
+            headers=admin_headers,
+            follow_redirects=False,
+        )
+        disabled = client.get("/admin", headers=teacher_headers, follow_redirects=False)
+        assert disabled.status_code == 303
+        assert disabled.headers["location"] == "/admin/login"
+
+        public_join = client.get("/join/not-a-real-token")
+        assert public_join.status_code == 404
+
+
+def test_easy_auth_migrates_existing_admin_without_replacing_identity(monkeypatch, tmp_path: Path):
+    password_app, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+    with TestClient(password_app.app):
+        pass
+    existing_admin_id = str(password_app.get_user_by_username("admin")["id"])
+
+    easy_auth_app, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password=None,
+        secret_key="",
+        auth_mode="easy_auth",
+        admin_email="admin@example.com",
+    )
+    first_identity = _easy_auth_headers("first-admin-id", "admin@example.com")
+    replacement_identity = _easy_auth_headers("replacement-id", "admin@example.com")
+
+    with TestClient(easy_auth_app.app) as client:
+        assert client.get("/admin", headers=first_identity).status_code == 200
+        replacement = client.get("/admin", headers=replacement_identity, follow_redirects=False)
+        assert replacement.status_code == 303
+        assert replacement.headers["location"] == "/admin/login"
+
+    admin = easy_auth_app.get_user_by_username("admin")
+    assert str(admin["id"]) == existing_admin_id
+    assert admin["email_norm"] == "admin@example.com"
+    assert admin["identity_subject"] == "first-admin-id"
+
+
+def _create_session_with_headers(
+    client: TestClient,
+    headers: dict[str, str],
+    title: str,
+) -> str:
+    response = client.post(
+        "/admin/create",
+        data={
+            "title": title,
+            "group_size": "5",
+            "multiplier": "1.5",
+            "endowment": "10",
+            "rounds": "30",
+        },
+        headers=headers,
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    return response.headers["location"].rsplit("/", 1)[-1]
 
 
 def test_admin_bootstrap_from_env_password(monkeypatch, tmp_path: Path):

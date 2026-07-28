@@ -10,7 +10,13 @@ from typing import Any, Dict, Optional
 
 from fastapi import HTTPException
 
-from ..config import AUTH_TOKEN_TTL_SECONDS, SECRET_KEY
+from ..config import (
+    ADMIN_EMAIL,
+    AUTH_MODE,
+    AUTH_MODE_EASY_AUTH,
+    AUTH_TOKEN_TTL_SECONDS,
+    SECRET_KEY,
+)
 
 
 def _b64url(data: bytes) -> str:
@@ -30,10 +36,16 @@ def _sign(message: bytes) -> str:
 def _is_auth_configured() -> bool:
     from .._sessions import get_user_by_username
 
+    if AUTH_MODE == AUTH_MODE_EASY_AUTH:
+        return bool(ADMIN_EMAIL) and get_user_by_username("admin") is not None
     return bool(SECRET_KEY) and get_user_by_username("admin") is not None
 
 
 def _auth_configuration_error() -> str:
+    if AUTH_MODE == AUTH_MODE_EASY_AUTH:
+        if not ADMIN_EMAIL:
+            return "Set ADMIN_EMAIL to the personal Microsoft account used by the initial admin."
+        return "No admin account is available. Restart the app after setting ADMIN_EMAIL."
     if not SECRET_KEY:
         return "Set SECRET_KEY to sign login cookies."
     return "No admin account is available. On first boot set ADMIN_PASSWORD so the app can create one."
@@ -46,6 +58,8 @@ def _must_configure_auth() -> None:
 
 def make_auth_token(user: sqlite3.Row) -> str:
     _must_configure_auth()
+    if AUTH_MODE == AUTH_MODE_EASY_AUTH:
+        raise HTTPException(500, "Application cookies are not used with Azure Easy Auth.")
     payload = {
         "uid": str(user["id"]),
         "role": str(user["role"]),

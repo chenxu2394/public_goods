@@ -5,11 +5,19 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ...auth import (
     _must_configure_auth,
+    get_easy_auth_identity,
     get_current_user,
     make_auth_token,
     verify_user_password,
 )
-from ...config import ADMIN_COOKIE_SECURE, AUTH_COOKIE_NAME, AUTH_TOKEN_TTL_SECONDS, LEGACY_ADMIN_COOKIE_NAME
+from ...config import (
+    ADMIN_COOKIE_SECURE,
+    AUTH_COOKIE_NAME,
+    AUTH_MODE,
+    AUTH_MODE_EASY_AUTH,
+    AUTH_TOKEN_TTL_SECONDS,
+    LEGACY_ADMIN_COOKIE_NAME,
+)
 from ...db import db
 from ..._sessions import _rehash_legacy_user_password_conn, get_user_by_id, get_user_by_username, set_user_password
 from ..helpers import require_authenticated_user
@@ -23,12 +31,31 @@ router = APIRouter()
 def admin_login_page(request: Request):
     if get_current_user(request):
         return RedirectResponse(url="/admin", status_code=303)
+    if AUTH_MODE == AUTH_MODE_EASY_AUTH and get_easy_auth_identity(request):
+        return login_page_response(
+            request,
+            status_code=403,
+            error="This Microsoft account has not been approved by the administrator.",
+        )
     return login_page_response(request)
+
+
+@router.get("/admin/login/microsoft")
+def admin_login_microsoft():
+    _must_configure_auth()
+    if AUTH_MODE != AUTH_MODE_EASY_AUTH:
+        return RedirectResponse(url="/admin/login", status_code=303)
+    return RedirectResponse(
+        url="/.auth/login/aad?post_login_redirect_uri=/admin",
+        status_code=303,
+    )
 
 
 @router.post("/admin/login")
 def admin_login_submit(request: Request, username: str = Form(...), password: str = Form(...)):
     _must_configure_auth()
+    if AUTH_MODE == AUTH_MODE_EASY_AUTH:
+        return RedirectResponse(url="/admin/login/microsoft", status_code=303)
     user = get_user_by_username(username)
     if not user:
         return login_page_response(request, status_code=401, error="Incorrect username or password.")
@@ -66,6 +93,11 @@ def admin_login_submit(request: Request, username: str = Form(...), password: st
 
 @router.post("/admin/logout")
 def admin_logout():
+    if AUTH_MODE == AUTH_MODE_EASY_AUTH:
+        return RedirectResponse(
+            url="/.auth/logout?post_logout_redirect_uri=/admin/login",
+            status_code=303,
+        )
     resp = RedirectResponse(url="/admin/login", status_code=303)
     resp.delete_cookie(AUTH_COOKIE_NAME, path="/")
     resp.delete_cookie(LEGACY_ADMIN_COOKIE_NAME, path="/")
@@ -82,6 +114,8 @@ def admin_change_password(
     user, gate = require_authenticated_user(request)
     if gate:
         return gate
+    if AUTH_MODE == AUTH_MODE_EASY_AUTH:
+        return RedirectResponse(url="/admin", status_code=303)
 
     def render_error(error: str):
         return admin_home_response(request, user, status_code=400, pw_error=error)

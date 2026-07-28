@@ -60,7 +60,7 @@
 </script>
 
 <div class="card">
-  <div><b>Signed in as:</b> <span class="mono">{{ user.username }}</span></div>
+  <div><b>Signed in as:</b> <span class="mono">{{ user.email or user.username }}</span></div>
   <div class="muted" style="margin-top:6px;">
     {% if is_admin %}
       Superuser access. You can manage all teachers and all sessions.
@@ -68,11 +68,12 @@
       Teacher access. You can manage only your own sessions.
     {% endif %}
   </div>
-  {% if pw_change_required %}
+  {% if pw_change_required and not easy_auth %}
     <div class="pill warn" style="margin-top:10px;">You must change your password before managing sessions.</div>
   {% endif %}
 </div>
 
+{% if not easy_auth %}
 <div class="card">
   <h3>Change Password</h3>
   {% if pw_error %}<div class="pill warn" style="margin-bottom:8px;">{{ pw_error }}</div>{% endif %}
@@ -95,13 +96,14 @@
     </div>
   </form>
 </div>
+{% endif %}
 
 {% if is_admin %}
 <div class="card">
   <h3>Teacher Accounts</h3>
   {% if teacher_error %}<div class="pill warn" style="margin-bottom:8px;">{{ teacher_error }}</div>{% endif %}
   {% if teacher_success %}<div class="pill ok" style="margin-bottom:8px;">{{ teacher_success }}</div>{% endif %}
-  {% if teacher_temp_password %}
+  {% if teacher_temp_password and not easy_auth %}
     <div class="pill warn" style="margin-bottom:8px;">
       Temporary password for <b>{{ teacher_temp_password_username }}</b>: <span class="mono">{{ teacher_temp_password }}</span>
     </div>
@@ -109,8 +111,13 @@
 
   <form method="post" action="/admin/teachers" class="row">
     <div class="col">
-      <div class="muted">Teacher username</div>
-      <input name="username" placeholder="Teacher1" required />
+      {% if easy_auth %}
+        <div class="muted">Teacher Microsoft account email</div>
+        <input name="email" type="email" placeholder="teacher@example.com" required />
+      {% else %}
+        <div class="muted">Teacher username</div>
+        <input name="username" placeholder="Teacher1" required />
+      {% endif %}
     </div>
     <div class="col" style="align-self:flex-end;">
       <button type="submit">Create Teacher</button>
@@ -122,10 +129,15 @@
   {% else %}
     <div class="table-scroll" style="margin-top:12px;">
       <table>
-        <tr><th>Username</th><th>Status</th><th>Password</th><th>Access</th></tr>
+        <tr>
+          <th>{{ "Microsoft account" if easy_auth else "Username" }}</th>
+          <th>Status</th>
+          <th>{{ "Microsoft link" if easy_auth else "Password" }}</th>
+          <th>Access</th>
+        </tr>
         {% for teacher in teachers %}
           <tr>
-            <td class="mono">{{ teacher.username }}</td>
+            <td class="mono">{{ teacher.email or teacher.username }}</td>
             <td>
               {% if teacher.disabled_at %}
                 <span class="pill warn">Disabled</span>
@@ -134,10 +146,18 @@
               {% endif %}
             </td>
             <td>
-              {% if teacher.must_change_password == 1 %}
-                <span class="pill warn">Must change</span>
+              {% if easy_auth %}
+                {% if teacher.identity_subject %}
+                  <span class="pill ok">Linked</span>
+                {% else %}
+                  <span class="pill warn">Awaiting first sign-in</span>
+                {% endif %}
               {% else %}
-                <span class="pill muted">Normal</span>
+                {% if teacher.must_change_password == 1 %}
+                  <span class="pill warn">Must change</span>
+                {% else %}
+                  <span class="pill muted">Normal</span>
+                {% endif %}
               {% endif %}
             </td>
             <td>
@@ -150,9 +170,11 @@
                   <button type="submit">Disable</button>
                 </form>
               {% endif %}
-              <form method="post" action="/admin/teachers/{{ teacher.id }}/reset_password" style="display:inline; margin-left:8px;">
-                <button type="submit">Reset Password</button>
-              </form>
+              {% if not easy_auth %}
+                <form method="post" action="/admin/teachers/{{ teacher.id }}/reset_password" style="display:inline; margin-left:8px;">
+                  <button type="submit">Reset Password</button>
+                </form>
+              {% endif %}
             </td>
           </tr>
         {% endfor %}

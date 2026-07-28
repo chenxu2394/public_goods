@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKFLOW_FILE=".github/workflows/deploy-azure-webapp-container.yml"
+cd "$PROJECT_DIR"
 
 info() { printf "[INFO] %s\n" "$*"; }
 warn() { printf "[WARN] %s\n" "$*" >&2; }
@@ -9,6 +11,23 @@ die() { printf "[ERROR] %s\n" "$*" >&2; exit 1; }
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
+}
+
+load_admin_email() {
+  local env_file="$PROJECT_DIR/.env"
+
+  if [[ -z "${ADMIN_EMAIL:-}" ]]; then
+    [[ -f "$env_file" ]] || die "Missing $env_file. Copy .env.example to .env and set ADMIN_EMAIL."
+    ADMIN_EMAIL="$(
+      uv run --frozen python -c \
+        'import sys; from dotenv import dotenv_values; print(dotenv_values(sys.argv[1]).get("ADMIN_EMAIL") or "")' \
+        "$env_file"
+    )"
+  fi
+
+  [[ "$ADMIN_EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] \
+    || die "Set a valid ADMIN_EMAIL in $env_file or the process environment."
+  export ADMIN_EMAIL
 }
 
 is_yes() {
@@ -117,9 +136,10 @@ discover_existing_plan() {
 need_cmd az
 need_cmd gh
 need_cmd git
-need_cmd openssl
+need_cmd uv
 
 [[ -f "$WORKFLOW_FILE" ]] || die "Workflow file not found: $WORKFLOW_FILE"
+load_admin_email
 
 if ! az account show >/dev/null 2>&1; then
   info "Azure login required. Opening browser login..."
@@ -132,10 +152,11 @@ fi
 
 default_subscription="$(az account show --query id -o tsv)"
 default_location="eastus2"
-default_rg="rg-public-goods"
-default_plan="asp-public-goods-f1"
+default_rg="PublicGoods"
+default_plan="PublicGoods-plan"
 default_sku="F1"
 default_use_existing_plan="Y"
+default_auto_discover_plan="N"
 
 origin_url="$(git config --get remote.origin.url || true)"
 default_repo="$(parse_repo_from_origin "$origin_url")"
@@ -145,26 +166,20 @@ default_owner="${default_repo%%/*}"
 default_owner_lc="$(printf "%s" "$default_owner" | tr '[:upper:]' '[:lower:]')"
 default_ghcr_user="$default_owner"
 
-base_app_name="public-goods"
-base_app_name="$(printf "%s" "$base_app_name" | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')"
-suffix="$(date +%m%d%H%M)"
-default_app="${base_app_name}-${suffix}"
-if ((${#default_app} > 63)); then
-  default_app="${default_app:0:63}"
-fi
-default_app="${default_app%-}"
+default_app="public-goods"
 
 prompt SUBSCRIPTION_ID "Azure Subscription ID" "$default_subscription"
 prompt LOCATION "Azure location" "$default_location"
 prompt RG "Resource Group name" "$default_rg"
+default_existing_plan_id="/subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RG}/providers/Microsoft.Web/serverfarms/PublicGoods-plan"
 prompt USE_EXISTING_PLAN "Use an existing App Service Plan? (Y/n)" "$default_use_existing_plan"
 if is_yes "$USE_EXISTING_PLAN"; then
-  prompt AUTO_DISCOVER_PLAN "Auto-discover existing Linux App Service Plans? (Y/n)" "Y"
+  prompt AUTO_DISCOVER_PLAN "Auto-discover existing Linux App Service Plans? (y/N)" "$default_auto_discover_plan"
   if is_yes "$AUTO_DISCOVER_PLAN"; then
     discover_existing_plan || true
   fi
   if [[ -z "${EXISTING_PLAN_ID:-}" ]]; then
-    prompt EXISTING_PLAN_ID "Existing App Service Plan resource ID" ""
+    prompt EXISTING_PLAN_ID "Existing App Service Plan resource ID" "$default_existing_plan_id"
   fi
   [[ -n "${EXISTING_PLAN_ID:-}" ]] || die "Existing App Service Plan resource ID cannot be empty."
 else
@@ -177,10 +192,6 @@ prompt GHCR_OWNER "GHCR owner (usually GitHub owner/org)" "$default_owner"
 prompt GHCR_USER "GHCR username/org for pull auth" "$default_ghcr_user"
 prompt DELETE_RG_IF_EXISTS "Delete existing resource group if it exists? (y/N)" "N"
 prompt_secret GHCR_PAT "GitHub PAT for GHCR pull (needs read:packages)"
-prompt_secret ADMIN_PASSWORD "ADMIN_PASSWORD for app login"
-
-secret_key_default="$(openssl rand -hex 32)"
-prompt SECRET_KEY "SECRET_KEY for app cookie signing" "$secret_key_default"
 
 GHCR_OWNER_LC="$(printf "%s" "$GHCR_OWNER" | tr '[:upper:]' '[:lower:]')"
 GHCR_IMAGE="ghcr.io/${GHCR_OWNER_LC}/public-goods-experiment:latest"
@@ -243,13 +254,15 @@ Configuration summary:
   GITHUB REPO:     $REPO
   GHCR IMAGE:      $GHCR_IMAGE
   BASE URL:        $BASE_URL
+  ADMIN EMAIL:     loaded from .env
   DELETE RG:       $DELETE_RG_IF_EXISTS
 
 This script will:
   1) Create/update Azure RG + Linux App Service Plan + Web App
   2) Configure Web App to pull container image from GHCR
-  3) Set required app settings
-  4) Create GitHub Actions variable/secret:
+  3) Set required application settings
+  4) Create/reuse the personal Microsoft app registration and configure Easy Auth
+  5) Create GitHub Actions variable/secret:
      - AZURE_WEBAPP_NAME
      - AZURE_WEBAPP_PUBLISH_PROFILE
 EOF
@@ -350,9 +363,8 @@ az webapp config container set -g "$RG" -n "$APP" \
 
 info "Setting required app settings..."
 az webapp config appsettings set -g "$RG" -n "$APP" --settings \
-  ADMIN_PASSWORD="$ADMIN_PASSWORD" \
-  SECRET_KEY="$SECRET_KEY" \
-  ADMIN_COOKIE_SECURE=1 \
+  AUTH_MODE=easy_auth \
+  ADMIN_EMAIL="$ADMIN_EMAIL" \
   PUBLIC_BASE_URL="$BASE_URL" \
   PUBLIC_GOODS_DB_PATH="/home/public_goods.db" \
   WEBSITES_PORT=8000 \
@@ -363,6 +375,9 @@ az webapp config appsettings set -g "$RG" -n "$APP" --settings \
 
 info "Enforcing HTTPS-only..."
 az webapp update -g "$RG" -n "$APP" --https-only true >/dev/null
+
+info "Configuring personal Microsoft sign-in through Azure CLI..."
+"$(dirname "$0")/configure_azure_easy_auth.sh" "$SUBSCRIPTION_ID" "$RG" "$APP"
 
 if [[ "$IS_SHARED_SKU" == "true" ]]; then
   warn "Using $PLAN_SKU_UPPER (Free/Shared tier). Always On and dedicated worker controls are not available."
@@ -409,6 +424,8 @@ Next steps:
   1) Ensure these files are committed on your main branch:
      - $WORKFLOW_FILE
      - Dockerfile
+     - .azure/easy-auth.json.template
+     - scripts/configure_azure_easy_auth.sh
   2) Push code:
      git add -A && git commit -m "Deploy setup" && git push origin main
   3) Watch GitHub Actions run in:

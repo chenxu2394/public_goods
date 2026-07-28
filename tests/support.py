@@ -17,6 +17,8 @@ def load_app(monkeypatch, tmp_path: Path, *, admin_password: str | None = DEFAUL
         seed_db(db_path, secret_key)
 
     monkeypatch.setenv("PUBLIC_GOODS_DB_PATH", str(db_path))
+    monkeypatch.setenv("AUTH_MODE", "password")
+    monkeypatch.delenv("ADMIN_EMAIL", raising=False)
     monkeypatch.setenv("SECRET_KEY", secret_key)
     monkeypatch.setenv("ADMIN_COOKIE_SECURE", "0")
     monkeypatch.setenv("PUBLIC_BASE_URL", "http://testserver")

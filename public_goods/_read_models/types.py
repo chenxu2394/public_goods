@@ -16,6 +16,7 @@ class LoginPageContext(TypedDict, total=False):
     configured: bool
     configuration_error: str
     pw_changed: bool
+    easy_auth: bool
     error: str
 
 
@@ -25,6 +26,7 @@ class AdminHomeContext(TypedDict, total=False):
     is_admin: bool
     must_change_password: bool
     pw_change_required: bool
+    easy_auth: bool
     sessions: List[sqlite3.Row]
     teachers: List[sqlite3.Row]
     pw_error: str

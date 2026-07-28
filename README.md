@@ -1,23 +1,72 @@
-# Public Goods Experiment (Azure Web App + Multi-User Admin/Teacher Auth)
+# Public Goods Experiment (Azure Web App + Microsoft Admin/Teacher Sign-In)
+
+## Authentication model
+
+- Admins and teachers sign in with preapproved personal Microsoft accounts through Azure App Service Easy Auth.
+- Students do not create accounts. They join a session using its join link plus an exact whitelist match on student number and name.
+- The application stores admin/teacher roles and session ownership locally; Microsoft handles authentication.
+- The initial admin email is read from the ignored local `.env` file and uploaded to Azure App Settings by the setup scripts.
+
+### Existing password admin migration
+
+Switching an existing production database from `AUTH_MODE=password` to `AUTH_MODE=easy_auth` does not create a second admin:
+
+1. The existing local user named `admin` keeps the same database user ID and all existing session ownership.
+2. On startup, the app adds the account configured as `ADMIN_EMAIL` to that user if no Microsoft identity is linked yet.
+3. On the first successful Microsoft sign-in, the immutable Microsoft subject ID is linked to that same local user.
+4. Later sign-ins must match that linked Microsoft identity. Matching the email text alone is no longer sufficient.
+
+The old password hash can remain in the row for migration safety, but password login is ignored while `AUTH_MODE=easy_auth`.
 
 ## Azure App Settings (required)
 
-Set in Azure Web App -> Configuration -> Application settings:
+The setup scripts apply these settings through Azure CLI:
 
-- ADMIN_PASSWORD: bootstrap password for the initial `admin` superuser
-- SECRET_KEY: a long random string (>= 32 chars)
+- `AUTH_MODE=easy_auth`
+- `ADMIN_EMAIL`: loaded from the local `.env` file by the setup scripts
+- `PUBLIC_BASE_URL`: public HTTPS origin for the app
+- `PUBLIC_GOODS_DB_PATH=/home/public_goods.db`
 
-`ADMIN_PASSWORD` is used only to create the first `admin` account if the database does not already contain one. After bootstrap, database-backed users are the source of truth.
+`ADMIN_EMAIL` preapproves and binds the initial admin on first Microsoft sign-in. After that first binding, the immutable Microsoft identity is the source of truth rather than the email address.
+
+## Configure Azure Easy Auth with Azure CLI
+
+Azure configuration is intentionally CLI-first. The checked-in authentication template is `.azure/easy-auth.json.template`; no Azure Portal steps are required.
+
+For a Web App that already exists:
+
+```bash
+./scripts/configure_azure_easy_auth.sh
+```
+
+Before running it, copy `.env.example` to the ignored `.env` file and set `ADMIN_EMAIL` to the initial admin's personal Microsoft account. The script queries the active Azure CLI subscription at run time. The baked-in resource defaults are resource group `PublicGoods` and Web App `public-goods`. With no arguments, review the displayed target and press Enter to continue. Positional arguments remain available for another deployment.
+
+The script:
+
+- creates or reuses a dedicated app registration with `PersonalMicrosoftAccount` as its audience
+- configures `https://<webapp-name>.azurewebsites.net/.auth/login/aad/callback`
+- creates the client secret only when needed and stores it as a slot-sticky App Service setting
+- uploads `AUTH_MODE` and `ADMIN_EMAIL` from local configuration to Azure App Settings
+- applies and verifies App Service Authentication V2 through `az rest`
+- allows anonymous requests at the Azure edge so student/display routes remain public; the app protects `/admin/*`
+
+The script is safe to rerun. To intentionally append and activate a new two-year client secret:
+
+```bash
+ROTATE_MICROSOFT_CLIENT_SECRET=1 \
+./scripts/configure_azure_easy_auth.sh
+```
+
+Easy Auth injects the authenticated principal into `X-MS-CLIENT-PRINCIPAL`. Only trust this mode when the application is reachable through Azure App Service Easy Auth.
 
 ## Optional settings
 
-- PUBLIC_BASE_URL: https://public-goods.azurewebsites.net (defaults to this)
-- PUBLIC_GOODS_DB_PATH: /home/public_goods.db (defaults to this)
-- ADMIN_COOKIE_SECURE: `1` (default, production) or `0` (local HTTP testing)
-- SQLITE_JOURNAL_MODE: `WAL` (default)
-- SQLITE_BUSY_TIMEOUT_MS: `5000` (default)
-- SQLITE_WRITE_RETRY_ATTEMPTS: `4` (default)
-- SQLITE_WRITE_RETRY_BASE_DELAY_MS: `100` (default)
+- `PUBLIC_BASE_URL`: `https://public-goods.azurewebsites.net` by default
+- `PUBLIC_GOODS_DB_PATH`: `/home/public_goods.db` by default
+- `SQLITE_JOURNAL_MODE`: `WAL` by default
+- `SQLITE_BUSY_TIMEOUT_MS`: `5000` by default
+- `SQLITE_WRITE_RETRY_ATTEMPTS`: `4` by default
+- `SQLITE_WRITE_RETRY_BASE_DELAY_MS`: `100` by default
 
 ## Recommended production settings (SQLite on Azure)
 
@@ -43,15 +92,24 @@ Keep the app single-instance when using SQLite. These settings improve burst tol
 
 ## Local run (uv)
 
+Azure Easy Auth is not present when running FastAPI directly. Local development therefore uses password mode in the ignored `.env` file.
+
+On first setup:
+
 ```bash
 uv sync
-ADMIN_PASSWORD='your-password' \
-SECRET_KEY='a-long-random-secret-at-least-32-chars' \
-ADMIN_COOKIE_SECURE='0' \
-PUBLIC_BASE_URL='http://127.0.0.1:8000' \
-PUBLIC_GOODS_DB_PATH='./public_goods.db' \
-uv run uvicorn app:app --host 0.0.0.0 --port 8000
+cp .env.example .env
 ```
+
+Then development is one short command:
+
+```bash
+./scripts/dev.sh
+```
+
+Open `http://127.0.0.1:8000/admin` and sign in as `admin` with `local-dev-password`. Use a separate local database; `ADMIN_PASSWORD` only bootstraps a new database.
+
+The application and development launcher load `.env` with `python-dotenv`, while real process environment variables take precedence. `UVICORN_HOST` and `UVICORN_PORT` in `.env` control the development listener. The script runs the already-installed Uvicorn server with reload support. `uv run fastapi dev` is not used because this project installs the small FastAPI runtime rather than the larger `fastapi[standard]` CLI bundle.
 
 ## Local checks
 
@@ -87,25 +145,17 @@ For a one-person live smoke test against the deployed site, use:
 python3 scripts/live_smoke_test.py --join-url "https://public-goods.azurewebsites.net/join/<join-token>"
 ```
 
-To minimize manual work on a fresh session, pass the admin session URL plus a management username. The script will prompt securely for the password if you omit `--password`:
-
-```bash
-python3 scripts/live_smoke_test.py \
-  --join-url "https://public-goods.azurewebsites.net/join/<join-token>" \
-  --session-url "https://public-goods.azurewebsites.net/admin/<session-id>" \
-  --username "admin"
-```
-
 What it does:
 
 - generates a whitelist CSV for 10 mock students and prints the rows
-- uploads that CSV automatically if `--session-url`/`--session-id` and `--username` are provided
+- pauses so an authenticated admin/teacher can upload that CSV through the browser
 - joins all 10 mock students through the public join link
-- locks groups and opens the contribution stage automatically when management credentials are provided
 - fires a concurrent contribution burst against the real student API
 - optionally also tests the reward/punishment action API with `--with-actions`
 
-To measure only the classroom submit burst, split the test into two runs:
+The script's `--username`/`--password` management automation is retained only for local `AUTH_MODE=password` testing. It cannot automate the interactive Microsoft Easy Auth browser login.
+
+To measure only the classroom submit burst against Azure, split the test into two runs:
 
 1. Prepare the session by uploading the whitelist and joining the mock students:
 
@@ -113,20 +163,19 @@ To measure only the classroom submit burst, split the test into two runs:
 python3 scripts/live_smoke_test.py \
   --mode prepare \
   --join-url "https://public-goods.azurewebsites.net/join/<join-token>" \
-  --session-url "https://public-goods.azurewebsites.net/admin/<session-id>" \
-  --username "admin" \
   --students 50 \
   --join-batch-size 10 \
   --state-file /tmp/pg-smoke-50.json
 ```
+
+The script pauses after generating the CSV. Upload it in the Microsoft-authenticated admin panel, then continue the script. Before the second command, lock the groups and open the round in the browser.
 
 2. Later, run only the concurrent contribution burst against those already-joined students:
 
 ```bash
 python3 scripts/live_smoke_test.py \
   --mode submit \
-  --state-file /tmp/pg-smoke-50.json \
-  --username "admin"
+  --state-file /tmp/pg-smoke-50.json
 ```
 
 Useful flags:
@@ -140,6 +189,7 @@ Useful flags:
 - `--pollers 0` to disable background status polling during the burst
 - `--with-actions` to also test `/api/{session_id}/submit_actions`
 - `--whitelist-out /tmp/smoke.csv` to control where the generated CSV is written
+- `--username` and `--password` for local password-mode management automation only
 
 Use a fresh session for this test so the generated `SMOKE...` student IDs are not already present.
 
@@ -153,7 +203,17 @@ Required GitHub repo settings:
 
 - Repository variable: `AZURE_WEBAPP_NAME` (your Azure Web App name)
 - Repository secret: `AZURE_WEBAPP_PUBLISH_PROFILE`
-  - In Azure Portal -> your Web App -> `Get publish profile`, then paste file content as this secret
+
+The setup script creates both. The equivalent CLI commands are:
+
+```bash
+gh variable set AZURE_WEBAPP_NAME --repo <owner/repo> --body <webapp-name>
+az webapp deployment list-publishing-profiles \
+  --resource-group <resource-group> \
+  --name <webapp-name> \
+  --xml |
+gh secret set AZURE_WEBAPP_PUBLISH_PROFILE --repo <owner/repo>
+```
 
 Trigger:
 
@@ -178,6 +238,8 @@ Prerequisites:
 
 - Azure CLI (`az`) installed and logged in
 - GitHub CLI (`gh`) installed and logged in
+- `uv` installed
+- ignored local `.env` created from `.env.example`, with `ADMIN_EMAIL` set
 - Workflow file exists in repo: `.github/workflows/deploy-azure-webapp-container.yml`
 - `Dockerfile` exists in repo
 
@@ -187,7 +249,14 @@ Run:
 ./scripts/setup_azure_webapp.sh
 ```
 
-The script interactively asks for values, creates Azure resources, configures GHCR pull + app settings, and writes GitHub Actions variable/secret (`AZURE_WEBAPP_NAME`, `AZURE_WEBAPP_PUBLISH_PROFILE`).
+The script interactively asks for values, creates Azure resources, configures GHCR pull, application settings, the personal Microsoft app registration, and Easy Auth, then writes the GitHub Actions variable/secret (`AZURE_WEBAPP_NAME`, `AZURE_WEBAPP_PUBLISH_PROFILE`). All Azure changes are made with `az`; the workflow does not require portal configuration.
+
+Its defaults now match the existing production resources:
+
+- active Azure CLI subscription, queried with `az account show`
+- resource group `PublicGoods`
+- Web App `public-goods`
+- existing Linux App Service plan `PublicGoods-plan` in `eastus2`
 
 If you already have an App Service Plan (for example an existing F1 plan), choose `Use an existing App Service Plan? = Y` and provide its resource ID. To find the ID:
 
@@ -203,57 +272,34 @@ Azure Web App settings for private GHCR image pull:
 - `DOCKER_REGISTRY_SERVER_PASSWORD=<github-pat-with-read:packages>`
 - `WEBSITES_ENABLE_APP_SERVICE_STORAGE=true` (recommended if using SQLite at `/home/public_goods.db`)
 
-## Azure backup setup for SQLite
+## Download the live SQLite database
 
 This app is designed to keep SQLite on `/home/public_goods.db`, which is the persistent App Service filesystem:
 
 - `app.py`
 - `scripts/setup_azure_webapp.sh`
 
-If your Azure app setting `PUBLIC_GOODS_DB_PATH` points somewhere under `/app` or another non-`/home` path, fix that first before relying on backups.
-
-Use the helper script to create Blob Storage and configure scheduled App Service backups:
+Download a consistent snapshot of the current live SQLite database directly from the Web App:
 
 ```bash
-./scripts/setup_azure_backups.sh
+./scripts/download_live_azure_db.sh [resource-group] [webapp-name] [output-directory] [subscription-id]
 ```
 
-What the script does:
-
-- validates that the Web App is on `B1` or higher
-- creates or reuses a Storage Account and private Blob container
-- generates a SAS URL for that container
-- configures scheduled Azure App Service custom backups
-- optionally runs an immediate backup
-
-Verify backup status:
-
-```bash
-./scripts/show_azure_backups.sh <resource-group> <webapp-name> [subscription-id]
-```
-
-Download one backup ZIP and extract the SQLite file:
-
-```bash
-./scripts/download_azure_backup.sh [storage-resource-group] [storage-account] [container-name] [subscription-id]
-```
-
-If you omit arguments, the script prompts for them, lists the available backup ZIPs in the container, lets you choose one, downloads it, extracts it, finds `public_goods.db` automatically, and also copies the chosen database to a flat file path for easy inspection with `sqlite3`.
+With no arguments, the downloader uses resource group `PublicGoods`, Web App `public-goods`, and the current directory. It creates a consistent snapshot with SQLite's online backup API, verifies the downloaded file, and removes the temporary server-side snapshot. It uses the Web App management endpoint directly and does not require an Azure Storage Account.
 
 Important notes:
 
-- App Service custom backups are not supported on `F1` / `D1`
 - keep `PUBLIC_GOODS_DB_PATH` under `/home`
 - keep the App Service plan single-instance when using SQLite
-- rotate the SAS before it expires, or scheduled backups will stop
-- restore to a slot or a new app first to avoid production downtime
+- the snapshot contains every non-deleted teacher session and its roster, contributions, actions, and results
+- treat downloaded databases as sensitive because they contain student identifiers, names, user identity records, and password hashes where password authentication was used
 
 ## How to use
 
 1. Visit `/admin` (redirects to `/admin/login`)
-2. Sign in as username `admin` with the bootstrap password from `ADMIN_PASSWORD`
-3. Create teacher accounts from the control panel; each teacher receives a temporary password and must change it on first login
-4. Teachers sign in at `/admin/login`, then create and manage only their own sessions
+2. Continue with the personal Microsoft account configured in `ADMIN_EMAIL`
+3. Approve each teacher by entering their personal Microsoft account email in the control panel
+4. Teachers sign in with the approved Microsoft account, then create and manage only their own sessions
 5. Upload whitelist CSV (`student_id,name`) for that session
 6. Share join link: `https://public-goods.azurewebsites.net/join/<session_id>`
 7. Lock groups (random assignment; groups constrained to 3-7 students, target 5)

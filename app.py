@@ -11,7 +11,11 @@ for _module_name in list(sys.modules):
 
 from public_goods.auth import verify_user_password  # noqa: E402
 from public_goods.config import (  # noqa: E402
+    ADMIN_EMAIL,
     ADMIN_COOKIE_SECURE,
+    AUTH_MODE,
+    AUTH_MODE_EASY_AUTH,
+    AUTH_MODE_PASSWORD,
     AUTH_COOKIE_NAME,
     AUTH_TOKEN_TTL_SECONDS,
     DB_PATH,
@@ -23,6 +27,7 @@ from public_goods.config import (  # noqa: E402
     MAX_GROUP_SIZE,
     MIN_GROUP_SIZE,
     PASSWORD_SCHEME_LEGACY_ADMIN,
+    PASSWORD_SCHEME_MICROSOFT,
     PASSWORD_SCHEME_PBKDF2,
     PHASES,
     PHASE_ROUNDS,
@@ -66,6 +71,7 @@ from public_goods.sessions import (  # noqa: E402
     get_session,
     get_session_by_join_token,
     get_session_for_user,
+    get_user_by_email,
     get_user_by_id,
     get_user_by_username,
     list_sessions,
@@ -85,7 +91,11 @@ from public_goods.sessions import (  # noqa: E402
 
 
 __all__ = [
+    "ADMIN_EMAIL",
     "ADMIN_COOKIE_SECURE",
+    "AUTH_MODE",
+    "AUTH_MODE_EASY_AUTH",
+    "AUTH_MODE_PASSWORD",
     "AUTH_COOKIE_NAME",
     "AUTH_TOKEN_TTL_SECONDS",
     "DB_PATH",
@@ -97,6 +107,7 @@ __all__ = [
     "MAX_GROUP_SIZE",
     "MIN_GROUP_SIZE",
     "PASSWORD_SCHEME_LEGACY_ADMIN",
+    "PASSWORD_SCHEME_MICROSOFT",
     "PASSWORD_SCHEME_PBKDF2",
     "PHASES",
     "PHASE_ROUNDS",
@@ -125,6 +136,7 @@ __all__ = [
     "get_session",
     "get_session_by_join_token",
     "get_session_for_user",
+    "get_user_by_email",
     "get_user_by_id",
     "get_user_by_username",
     "init_db",

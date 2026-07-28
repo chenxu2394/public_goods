@@ -1,31 +1,49 @@
 {% extends "_base.html" %}
 {% set heading = "Sign In" %}
-{% set subheading = "Use your username and password" %}
+{% set subheading = "Use your approved Microsoft account" if easy_auth else "Use your username and password" %}
 {% block content %}
 <div class="card">
   {% if not configured %}
     <div class="err"><b>Server missing authentication configuration</b></div>
     <div class="muted" style="margin-top:8px;">
       {{ configuration_error }}
-      <div class="mono" style="margin-top:6px;">SECRET_KEY</div>
-      <div class="mono">ADMIN_PASSWORD (bootstrap only, first deploy)</div>
+      {% if easy_auth %}
+        <div class="mono" style="margin-top:6px;">ADMIN_EMAIL</div>
+      {% else %}
+        <div class="mono" style="margin-top:6px;">SECRET_KEY</div>
+        <div class="mono">ADMIN_PASSWORD (bootstrap only, first deploy)</div>
+      {% endif %}
     </div>
   {% else %}
     {% if error %}
       <div class="err">{{ error }}</div>
+      {% if easy_auth %}
+        <div style="margin-top:12px;">
+          <a href="/.auth/logout?post_logout_redirect_uri=/admin/login">Sign out of Microsoft and try another account</a>
+        </div>
+      {% endif %}
     {% endif %}
-    {% if pw_changed %}
+    {% if pw_changed and not easy_auth %}
       <div class="pill ok" style="margin-bottom:8px;">Password changed. Please sign in with your new password.</div>
     {% endif %}
-    <form method="post" action="/admin/login" style="margin-top:10px;">
-      <div class="muted">Username</div>
-      <input name="username" type="text" autocomplete="username" required />
-      <div class="muted" style="margin-top:10px;">Password</div>
-      <input name="password" type="password" required />
-      <div style="margin-top:12px;">
-        <button type="submit">Sign in</button>
+    {% if easy_auth %}
+      <div class="muted" style="margin-top:10px;">
+        Only Microsoft accounts approved by the administrator can access the control panel.
       </div>
-    </form>
+      <form method="get" action="/admin/login/microsoft" style="margin-top:12px;">
+        <button type="submit">Continue with Microsoft</button>
+      </form>
+    {% else %}
+      <form method="post" action="/admin/login" style="margin-top:10px;">
+        <div class="muted">Username</div>
+        <input name="username" type="text" autocomplete="username" required />
+        <div class="muted" style="margin-top:10px;">Password</div>
+        <input name="password" type="password" required />
+        <div style="margin-top:12px;">
+          <button type="submit">Sign in</button>
+        </div>
+      </form>
+    {% endif %}
   {% endif %}
 </div>
 {% endblock %}

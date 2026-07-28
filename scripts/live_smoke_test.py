@@ -74,12 +74,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--username",
         default="",
-        help="Optional management username (admin or owner teacher) for automatic whitelist upload and round setup.",
+        help="Optional local password-mode management username for automatic whitelist upload and round setup.",
     )
     parser.add_argument(
         "--password",
         default="",
-        help="Optional management password. If omitted, the script uses PG_SMOKE_PASSWORD or prompts securely.",
+        help=(
+            "Optional local password-mode management password. "
+            "Azure Easy Auth browser login is not automated. "
+            "If omitted, the script uses PG_SMOKE_PASSWORD or prompts securely."
+        ),
     )
     parser.add_argument(
         "--state-file",

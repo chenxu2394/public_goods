@@ -2,6 +2,13 @@ from __future__ import annotations
 
 import os
 
+from dotenv import load_dotenv
+
+
+PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = os.path.dirname(PACKAGE_DIR)
+load_dotenv(os.path.join(APP_DIR, ".env"), override=False)
+
 
 def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
     raw = (os.environ.get(name) or "").strip()
@@ -13,10 +20,8 @@ def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
         return default
 
 
-PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_DIR = os.path.dirname(PACKAGE_DIR)
 TEMPLATE_DIR = os.path.join(APP_DIR, "templates")
-APP_TITLE = "Public Goods Experiment (Azure + Multi-User Auth)"
+APP_TITLE = "Public Goods Experiment (Azure Easy Auth)"
 
 # Azure Web App: /home is persistent
 DEFAULT_DB_PATH = "/home/public_goods.db"
@@ -33,6 +38,15 @@ SQLITE_JOURNAL_MODE = (
 )
 
 # Auth / account protection
+AUTH_MODE_PASSWORD = "password"
+AUTH_MODE_EASY_AUTH = "easy_auth"
+_auth_mode_raw = (os.environ.get("AUTH_MODE") or AUTH_MODE_EASY_AUTH).strip().lower()
+AUTH_MODE = (
+    _auth_mode_raw
+    if _auth_mode_raw in {AUTH_MODE_PASSWORD, AUTH_MODE_EASY_AUTH}
+    else AUTH_MODE_EASY_AUTH
+)
+ADMIN_EMAIL = (os.environ.get("ADMIN_EMAIL") or "").strip().casefold()
 ADMIN_PASSWORD = (os.environ.get("ADMIN_PASSWORD") or "").strip()
 SECRET_KEY = os.environ.get("SECRET_KEY", "").strip()
 AUTH_COOKIE_NAME = "pg_auth"
@@ -47,6 +61,7 @@ USER_ROLE_ADMIN = "admin"
 USER_ROLE_TEACHER = "teacher"
 PASSWORD_SCHEME_PBKDF2 = "pbkdf2_sha256_v1"
 PASSWORD_SCHEME_LEGACY_ADMIN = "legacy_admin_secretkey_v1"
+PASSWORD_SCHEME_MICROSOFT = "microsoft_easy_auth_v1"
 PASSWORD_HASH_ITERATIONS = 200_000
 
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://public-goods.azurewebsites.net").rstrip("/")

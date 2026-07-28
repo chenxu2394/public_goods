@@ -3,7 +3,7 @@ from __future__ import annotations
 from .connection import _configure_sqlite_storage, db
 from .identifiers import _backfill_anonymous_ids
 from .migrations import backfill_result_phase_fields, apply_schema_migrations
-from .schema import create_schema, create_session_join_token_index
+from .schema import create_schema, create_session_join_token_index, create_user_identity_indexes
 
 
 def init_db() -> None:
@@ -14,6 +14,7 @@ def init_db() -> None:
         _configure_sqlite_storage(conn)
         create_schema(conn)
         apply_schema_migrations(conn)
+        create_user_identity_indexes(conn)
         backfill_result_phase_fields(conn)
 
         admin_user = _ensure_bootstrap_admin(conn)

@@ -7,9 +7,10 @@ from typing import List, Optional
 from fastapi import HTTPException
 
 from .._auth.passwords import _hash_password_record, _legacy_hash_password
-from .._auth.usernames import _normalize_username, _validate_username
+from .._auth.usernames import _normalize_email, _normalize_username, _validate_email, _validate_username
 from ..config import (
     PASSWORD_SCHEME_PBKDF2,
+    PASSWORD_SCHEME_MICROSOFT,
     USER_ROLE_ADMIN,
     USER_ROLE_TEACHER,
 )
@@ -27,11 +28,19 @@ def _create_user_conn(
     password_salt: Optional[str] = None,
     password_version: int = 1,
     must_change_password: bool = False,
+    email: Optional[str] = None,
+    identity_provider: Optional[str] = None,
+    identity_subject: Optional[str] = None,
+    validate_username: bool = True,
 ) -> sqlite3.Row:
     if role not in {USER_ROLE_ADMIN, USER_ROLE_TEACHER}:
         raise ValueError("Invalid user role")
-    username = _validate_username(username)
+    username = _validate_username(username) if validate_username else username.strip()
+    if not username:
+        raise ValueError("Username is required")
     username_norm = _normalize_username(username)
+    email = _validate_email(email) if email else None
+    email_norm = _normalize_email(email) if email else None
     if password is not None:
         password_hash, password_salt = _hash_password_record(password)
         password_scheme = PASSWORD_SCHEME_PBKDF2
@@ -43,15 +52,20 @@ def _create_user_conn(
     conn.execute(
         """
         INSERT INTO users(
-            id, username, username_norm, role, password_scheme, password_hash, password_salt,
+            id, username, username_norm, email, email_norm, identity_provider, identity_subject,
+            role, password_scheme, password_hash, password_salt,
             password_version, must_change_password, disabled_at, created_at, updated_at
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """,
         (
             user_id,
             username,
             username_norm,
+            email,
+            email_norm,
+            identity_provider,
+            identity_subject,
             role,
             password_scheme,
             password_hash,
@@ -129,6 +143,30 @@ def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
         conn.close()
 
 
+def get_user_by_email(email: str) -> Optional[sqlite3.Row]:
+    email_norm = _normalize_email(email)
+    conn = db()
+    try:
+        return conn.execute("SELECT * FROM users WHERE email_norm=?", (email_norm,)).fetchone()
+    finally:
+        conn.close()
+
+
+def get_user_by_external_identity(identity_provider: str, identity_subject: str) -> Optional[sqlite3.Row]:
+    conn = db()
+    try:
+        return conn.execute(
+            """
+            SELECT *
+            FROM users
+            WHERE identity_provider=? AND identity_subject=?
+            """,
+            (identity_provider, identity_subject),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
 def list_teachers(*, active_only: bool = False) -> List[sqlite3.Row]:
     conn = db()
     try:
@@ -167,6 +205,73 @@ def create_user(username: str, role: str, password: str, *, must_change_password
         )
         conn.commit()
         return user
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def create_microsoft_user(email: str, role: str) -> sqlite3.Row:
+    email = _validate_email(email)
+    conn = db()
+    try:
+        user = _create_user_conn(
+            conn,
+            email,
+            role,
+            password_scheme=PASSWORD_SCHEME_MICROSOFT,
+            password_hash="",
+            password_salt="",
+            must_change_password=False,
+            email=email,
+            validate_username=False,
+        )
+        conn.commit()
+        return user
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def bind_user_external_identity(
+    user_id: str,
+    *,
+    identity_provider: str,
+    identity_subject: str,
+    email: str,
+) -> sqlite3.Row:
+    email = _validate_email(email)
+    conn = db()
+    try:
+        current = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        if not current:
+            raise HTTPException(404, "User not found")
+        if current["identity_subject"] and (
+            str(current["identity_provider"]) != identity_provider
+            or str(current["identity_subject"]) != identity_subject
+        ):
+            raise HTTPException(403, "This account is already linked to another Microsoft identity.")
+
+        conn.execute(
+            """
+            UPDATE users
+            SET email=?, email_norm=?, identity_provider=?, identity_subject=?, updated_at=?
+            WHERE id=?
+            """,
+            (
+                email,
+                _normalize_email(email),
+                identity_provider,
+                identity_subject,
+                now_iso(),
+                user_id,
+            ),
+        )
+        conn.commit()
+        return conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
     except Exception:
         conn.rollback()
         raise

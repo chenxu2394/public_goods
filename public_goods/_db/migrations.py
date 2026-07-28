@@ -26,6 +26,11 @@ def _migrate_student_identifier_columns(conn: sqlite3.Connection) -> None:
 def apply_schema_migrations(conn: sqlite3.Connection) -> None:
     _migrate_student_identifier_columns(conn)
 
+    _ensure_column(conn, "users", "email", "TEXT")
+    _ensure_column(conn, "users", "email_norm", "TEXT")
+    _ensure_column(conn, "users", "identity_provider", "TEXT")
+    _ensure_column(conn, "users", "identity_subject", "TEXT")
+
     _ensure_column(conn, "sessions", "action_open", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "sessions", "demo_mode", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "sessions", "join_token", "TEXT")
@@ -70,4 +75,3 @@ def backfill_result_phase_fields(conn: sqlite3.Connection) -> None:
         """,
             phase_updates,
         )
-
