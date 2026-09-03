@@ -183,6 +183,38 @@ def test_admin_panel_renders_for_admin_and_teacher(monkeypatch, tmp_path):
         assert "Render Session" in teacher_panel.text
 
 
+def test_all_html_pages_include_scroll_preservation(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        public_pages = [
+            (client.get("/"), "home"),
+            (client.get("/admin/login"), "admin-login"),
+        ]
+        assert login(client).status_code == 303
+        session_id, students, join_token = setup_grouped_session(
+            client,
+            app_module,
+            "Scroll Preservation Session",
+        )
+        authenticated_pages = [
+            (client.get("/admin"), "admin-home"),
+            (client.get(f"/admin/{session_id}"), f"session-panel:{session_id}"),
+            (client.get(f"/admin/{session_id}/share"), f"share:{session_id}"),
+            (client.get(f"/join/{join_token}"), f"join:{join_token}"),
+            (
+                client.get(f"/s/{session_id}/{students[0][0]}"),
+                f"student:{session_id}:{students[0][0]}",
+            ),
+            (client.get(f"/display/{session_id}"), f"display:{session_id}"),
+        ]
+
+    for response, page_key in public_pages + authenticated_pages:
+        assert response.status_code == 200
+        assert f'data-scroll-page="{page_key}"' in response.text
+        assert "public-goods:pending-scroll" in response.text
+
+
 def test_share_link_page_and_api_payload_remain_consistent(monkeypatch, tmp_path):
     app_module, _ = load_app(monkeypatch, tmp_path)
 

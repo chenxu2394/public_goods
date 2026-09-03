@@ -35,7 +35,7 @@
     }
   </style>
 </head>
-<body>
+<body data-scroll-page="{{ scroll_page if scroll_page else request.url.path }}">
   <div class="row">
     <div class="col">
       <h2 style="margin:0 0 6px 0;">{{ heading if heading else "" }}</h2>
@@ -46,5 +46,6 @@
     </div>
   </div>
   {% block content %}{% endblock %}
+  {% include "_scroll_preservation.html" %}
 </body>
 </html>

@@ -1,0 +1,58 @@
+<script>
+  (function() {
+    var pendingKey = "public-goods:pending-scroll";
+    var pageKey = document.body.getAttribute("data-scroll-page") || window.location.pathname;
+    var maxAgeMs = 30000;
+
+    try {
+      var savedRaw = sessionStorage.getItem(pendingKey);
+      if (savedRaw !== null) {
+        sessionStorage.removeItem(pendingKey);
+        var saved = JSON.parse(savedRaw);
+        if (
+          saved &&
+          saved.page === pageKey &&
+          Number.isFinite(saved.y) &&
+          Number.isFinite(saved.at) &&
+          Date.now() - saved.at <= maxAgeMs
+        ) {
+          var restoreCancelled = false;
+          var restore = function() {
+            if (!restoreCancelled) {
+              window.scrollTo(0, saved.y);
+            }
+          };
+          var cancelRestore = function() {
+            restoreCancelled = true;
+          };
+          ["wheel", "touchstart", "pointerdown", "keydown"].forEach(function(eventName) {
+            window.addEventListener(eventName, cancelRestore, {once: true, passive: true});
+          });
+          window.requestAnimationFrame(function() {
+            window.requestAnimationFrame(restore);
+          });
+          window.addEventListener("load", restore, {once: true});
+          [100, 300, 750, 1500, 2500].forEach(function(delay) {
+            window.setTimeout(restore, delay);
+          });
+        }
+      }
+    } catch (err) {}
+
+    document.addEventListener("submit", function(event) {
+      if (event.defaultPrevented) {
+        return;
+      }
+      var form = event.target;
+      if (!(form instanceof HTMLFormElement)) {
+        return;
+      }
+      try {
+        sessionStorage.setItem(
+          pendingKey,
+          JSON.stringify({page: pageKey, y: window.scrollY || window.pageYOffset || 0, at: Date.now()})
+        );
+      } catch (err) {}
+    });
+  })();
+</script>

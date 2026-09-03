@@ -1,4 +1,5 @@
 {% extends "_base.html" %}
+{% set scroll_page = "admin-home" %}
 {% set heading = "Control Panel" %}
 {% set subheading = "Create and manage classroom experiments" %}
 {% block top_right %}
@@ -46,7 +47,7 @@
     if (pendingDeleteForm) {
       var form = pendingDeleteForm;
       closeDeleteModal();
-      form.submit();
+      form.requestSubmit();
     }
   });
   document.getElementById('delete-modal').addEventListener('click', function(e) {
