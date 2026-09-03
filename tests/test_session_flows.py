@@ -14,7 +14,6 @@ from tests.support import (
     open_round,
     setup_grouped_session,
     submit_contributions,
-    switch_phase,
 )
 
 
@@ -221,6 +220,83 @@ def test_cannot_open_action_stage_during_baseline(monkeypatch, tmp_path):
     assert "Baseline rounds do not have an action stage." in response.text
 
 
+def test_teacher_selects_and_locks_each_round_type(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id, _, _ = setup_grouped_session(client, app_module, "Flexible Round Types", rounds=3)
+        panel = client.get(f"/admin/{session_id}")
+        assert panel.status_code == 200
+        assert 'name="phase"' in panel.text
+        assert "Choose a round type" in panel.text
+
+        missing_phase = client.post(
+            f"/admin/{session_id}/open_round",
+            data={"round_no": "1"},
+            follow_redirects=False,
+        )
+        assert missing_phase.status_code == 400
+        assert app_module.get_session(session_id)["current_phase"] is None
+
+        open_round(client, session_id, 1, "punishment")
+        assert app_module.get_session(session_id)["current_phase"] == "punishment"
+
+        change_after_open = client.post(
+            f"/admin/{session_id}/open_round",
+            data={"round_no": "1", "phase": "reward"},
+            follow_redirects=False,
+        )
+        assert change_after_open.status_code == 400
+        assert app_module.get_session(session_id)["current_phase"] == "punishment"
+
+        submit_contributions(client, session_id, {"20260001": 1, "20260002": 2, "20260003": 3})
+        open_action_stage(client, session_id)
+        close_and_compute(client, session_id)
+        app_module.init_db()
+        conn = app_module.db()
+        stored_phase = conn.execute(
+            "SELECT DISTINCT phase FROM results WHERE session_id=? AND round_no=1",
+            (session_id,),
+        ).fetchone()["phase"]
+        conn.close()
+        assert stored_phase == "punishment"
+
+        next_session = app_module.get_session(session_id)
+        assert int(next_session["current_round"]) == 2
+        assert next_session["current_phase"] is None
+
+        open_round(client, session_id, 2, "baseline")
+        status = client.get(f"/api/{session_id}/status", params={"student_id": "20260001"}).json()
+        assert status["session"]["phase"] == "baseline"
+        assert status["session"]["phase_round"] == 1
+
+        submit_contributions(client, session_id, {"20260001": 0, "20260002": 0, "20260003": 0})
+        close_and_compute(client, session_id)
+
+        open_round(client, session_id, 3, "punishment")
+        status = client.get(f"/api/{session_id}/status", params={"student_id": "20260001"}).json()
+        assert status["session"]["phase_round"] == 2
+        submit_contributions(client, session_id, {"20260001": 0, "20260002": 0, "20260003": 0})
+        open_action_stage(client, session_id)
+        close_and_compute(client, session_id)
+
+        student_rows = get_student_rows(app_module, session_id)
+        conn = app_module.db()
+        final_row = conn.execute(
+            """
+            SELECT phase, phase_round, phase_cumulative
+            FROM results
+            WHERE session_id=? AND round_no=3 AND student_id=?
+        """,
+            (session_id, student_rows["20260001"]["id"]),
+        ).fetchone()
+        conn.close()
+        assert final_row["phase"] == "punishment"
+        assert int(final_row["phase_round"]) == 2
+        assert float(final_row["phase_cumulative"]) == 22.0
+
+
 def test_cannot_compute_reward_round_before_action_stage(monkeypatch, tmp_path):
     app_module, _ = load_app(monkeypatch, tmp_path)
 
@@ -228,8 +304,7 @@ def test_cannot_compute_reward_round_before_action_stage(monkeypatch, tmp_path):
         assert login(client).status_code == 303
         session_id, students, _ = setup_grouped_session(client, app_module, "Reward Stage Session")
 
-        switch_phase(client, session_id, "reward")
-        open_round(client, session_id, 11)
+        open_round(client, session_id, 1, "reward")
         submit_contributions(
             client,
             session_id,
@@ -256,8 +331,7 @@ def test_submit_endpoints_enforce_stage_boundaries(monkeypatch, tmp_path):
         assert closed_contribution.status_code == 400
         assert "Contribution stage is not open" in closed_contribution.text
 
-        switch_phase(client, session_id, "reward")
-        open_round(client, session_id, 11)
+        open_round(client, session_id, 1, "reward")
 
         closed_action = client.post(
             f"/api/{session_id}/submit_actions",
@@ -283,8 +357,7 @@ def test_api_status_payload_changes_between_contribution_and_action_stage(monkey
         assert login(client).status_code == 303
         session_id, students, _ = setup_grouped_session(client, app_module, "Status Payload Session")
 
-        switch_phase(client, session_id, "reward")
-        open_round(client, session_id, 11)
+        open_round(client, session_id, 1, "reward")
         submit_contributions(
             client,
             session_id,
@@ -363,8 +436,7 @@ def test_export_includes_expected_phase_and_action_fields_per_round(monkeypatch,
         submit_contributions(client, session_id, {"20260001": 4, "20260002": 5, "20260003": 6})
         close_and_compute(client, session_id)
 
-        switch_phase(client, session_id, "reward")
-        open_round(client, session_id, 11)
+        open_round(client, session_id, 2, "reward")
         submit_contributions(client, session_id, {"20260001": 1, "20260002": 2, "20260003": 3})
         open_action_stage(client, session_id)
 
@@ -397,7 +469,7 @@ def test_export_includes_expected_phase_and_action_fields_per_round(monkeypatch,
 
     rows_by_key = {(row["student_id"], int(row["round_no"])): row for row in rows}
 
-    bob_reward = rows_by_key[("20260002", 11)]
+    bob_reward = rows_by_key[("20260002", 2)]
     assert bob_reward["phase"] == "reward"
     assert bob_reward["phase_round"] == "1"
     assert bob_reward["action_sent"] == "1"
@@ -405,9 +477,9 @@ def test_export_includes_expected_phase_and_action_fields_per_round(monkeypatch,
     assert float(bob_reward["income"]) == 14.0
     assert float(bob_reward["phase_cumulative"]) == 14.0
 
-    bob_future_reward = rows_by_key[("20260002", 12)]
-    assert bob_future_reward["phase"] == "reward"
-    assert bob_future_reward["phase_round"] == "2"
+    bob_future_reward = rows_by_key[("20260002", 3)]
+    assert bob_future_reward["phase"] == ""
+    assert bob_future_reward["phase_round"] == ""
     assert bob_future_reward["income"] == ""
     assert bob_future_reward["action_sent"] == ""
     assert bob_future_reward["action_received"] == ""

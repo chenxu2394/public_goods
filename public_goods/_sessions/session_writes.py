@@ -35,9 +35,9 @@ def create_session_record(
         """
         INSERT INTO sessions(
             id, title, group_size, multiplier, endowment, rounds, created_at,
-            locked, current_round, round_open, action_open, join_token, owner_user_id
+            locked, current_round, current_phase, round_open, action_open, join_token, owner_user_id
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """,
         (
             session_id,
@@ -49,6 +49,7 @@ def create_session_record(
             now_iso(),
             0,
             1,
+            None,
             0,
             0,
             join_token,
@@ -144,4 +145,3 @@ def delete_session(session_id: str) -> None:
         raise
     finally:
         conn.close()
-

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
-from ...config import PHASE_ROUNDS, PHASES
+from ...config import PHASES
 from ...db import db
 from ...experiment import (
     advance_round,
@@ -12,9 +12,8 @@ from ...experiment import (
     lock_groups,
     open_action_stage as open_action_stage_for_session,
     open_round as open_round_for_session,
-    phase_for_round,
     phase_label,
-    phase_start_round,
+    selected_phase,
     stage_of_session,
 )
 from ..helpers import require_management_session
@@ -34,45 +33,13 @@ def admin_lock(request: Request, session_id: str):
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
 
 
-@router.post("/admin/{session_id}/switch_phase")
-def admin_switch_phase(request: Request, session_id: str, phase: str = Form(...)):
-    user, sess, gate = require_management_session(request, session_id)
-    if gate:
-        return gate
-
-    phase = phase.strip().lower()
-    if phase not in PHASES:
-        raise HTTPException(400, "invalid phase")
-
-    rounds = int(sess["rounds"])
-    start = phase_start_round(phase)
-    if start > rounds:
-        raise HTTPException(400, f"This session has only {rounds} rounds; phase {phase} is unavailable.")
-    end = min(rounds, start + PHASE_ROUNDS - 1)
-
-    conn = db()
-    row = conn.execute(
-        "SELECT MAX(round_no) AS r FROM results WHERE session_id=? AND round_no BETWEEN ? AND ?",
-        (session_id, start, end),
-    ).fetchone()
-    max_done = row["r"]
-
-    if max_done is None:
-        target_round = start
-    else:
-        target_round = min(end, int(max_done) + 1)
-
-    conn.execute(
-        "UPDATE sessions SET current_round=?, round_open=0, action_open=0 WHERE id=?",
-        (target_round, session_id),
-    )
-    conn.commit()
-    conn.close()
-    return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
-
-
 @router.post("/admin/{session_id}/open_round")
-def admin_open_round(request: Request, session_id: str, round_no: int | None = Form(None)):
+def admin_open_round(
+    request: Request,
+    session_id: str,
+    round_no: int | None = Form(None),
+    phase: str = Form(""),
+):
     user, sess, gate = require_management_session(request, session_id)
     if gate:
         return gate
@@ -86,10 +53,24 @@ def admin_open_round(request: Request, session_id: str, round_no: int | None = F
         round_no = int(sess["current_round"])
 
     round_no = int(round_no)
+    if round_no != int(sess["current_round"]):
+        raise HTTPException(400, "Only the current round can be opened.")
     if round_no < 1 or round_no > int(sess["rounds"]):
-        raise HTTPException(400, "invalid round")
+        raise HTTPException(400, "Invalid round.")
+    phase = phase.strip().lower()
+    if phase not in PHASES:
+        raise HTTPException(400, "Choose Baseline, Reward, or Punishment before opening the round.")
 
-    open_round_for_session(session_id, round_no)
+    conn = db()
+    already_computed = conn.execute(
+        "SELECT 1 FROM results WHERE session_id=? AND round_no=? LIMIT 1",
+        (session_id, round_no),
+    ).fetchone()
+    conn.close()
+    if already_computed is not None:
+        raise HTTPException(400, "All rounds in this session have already been computed.")
+
+    open_round_for_session(session_id, round_no, phase)
     return RedirectResponse(url=f"/admin/{session_id}", status_code=303)
 
 
@@ -104,8 +85,10 @@ def admin_open_action_stage(request: Request, session_id: str):
 
     stage = stage_of_session(sess)
     round_no = int(sess["current_round"])
-    phase, _ = phase_for_round(round_no)
+    phase = selected_phase(sess)
 
+    if phase is None:
+        raise HTTPException(400, "Choose a round type before opening the round.")
     if phase not in ("reward", "punishment"):
         raise HTTPException(400, "Baseline rounds do not have an action stage.")
     if stage == "closed":
@@ -126,7 +109,10 @@ def admin_close_and_compute(request: Request, session_id: str):
     stage = stage_of_session(sess)
     round_no = int(sess["current_round"])
     rounds = int(sess["rounds"])
-    phase, _ = phase_for_round(round_no)
+    phase = selected_phase(sess)
+
+    if phase is None:
+        raise HTTPException(400, "Choose a round type before computing this round.")
 
     if stage == "closed":
         raise HTTPException(400, "Round is already closed. Open it first.")

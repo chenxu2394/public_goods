@@ -18,7 +18,7 @@ def test_compute_results_baseline_reward_and_punishment_math(monkeypatch, tmp_pa
     app_module, _ = load_initialized_app(monkeypatch, tmp_path)
     session_id = "math-session"
 
-    insert_session(app_module, session_id, multiplier=1.5, endowment=10, rounds=30)
+    insert_session(app_module, session_id, multiplier=1.5, endowment=10, rounds=30, current_phase="baseline")
     insert_students(
         app_module,
         session_id,
@@ -83,6 +83,10 @@ def test_compute_results_baseline_reward_and_punishment_math(monkeypatch, tmp_pa
             (internal_ids["20260002"], internal_ids["20260003"], 1),
         ],
     )
+    conn = app_module.db()
+    conn.execute("UPDATE sessions SET current_round=11, current_phase='reward' WHERE id=?", (session_id,))
+    conn.commit()
+    conn.close()
     app_module.compute_results(session_id, 11)
     reward_rows = get_result_rows(app_module, session_id, 11)
 
@@ -134,6 +138,10 @@ def test_compute_results_baseline_reward_and_punishment_math(monkeypatch, tmp_pa
             (internal_ids["20260003"], internal_ids["20260002"], 2),
         ],
     )
+    conn = app_module.db()
+    conn.execute("UPDATE sessions SET current_round=21, current_phase='punishment' WHERE id=?", (session_id,))
+    conn.commit()
+    conn.close()
     app_module.compute_results(session_id, 21)
     punishment_rows = get_result_rows(app_module, session_id, 21)
 
@@ -159,7 +167,15 @@ def test_compute_results_ignores_invalid_actions(monkeypatch, tmp_path):
     app_module, _ = load_initialized_app(monkeypatch, tmp_path)
     session_id = "invalid-action-session"
 
-    insert_session(app_module, session_id, multiplier=1.5, endowment=10, rounds=30)
+    insert_session(
+        app_module,
+        session_id,
+        multiplier=1.5,
+        endowment=10,
+        rounds=30,
+        current_round=11,
+        current_phase="reward",
+    )
     insert_students(
         app_module,
         session_id,
@@ -326,23 +342,26 @@ def test_phase_status_and_student_report_helpers_preserve_seeded_results(monkeyp
         {
             "phase": "baseline",
             "phase_label": "Baseline",
-            "total_rounds": 10,
+            "total_rounds": None,
             "computed_rounds": 2,
             "completed": False,
-        },
-        {
-            "phase": "reward",
-            "phase_label": "Reward",
-            "total_rounds": 10,
-            "computed_rounds": 1,
-            "completed": False,
+            "active": False,
         },
         {
             "phase": "punishment",
             "phase_label": "Punishment",
-            "total_rounds": 5,
+            "total_rounds": None,
             "computed_rounds": 0,
             "completed": False,
+            "active": False,
+        },
+        {
+            "phase": "reward",
+            "phase_label": "Reward",
+            "total_rounds": None,
+            "computed_rounds": 1,
+            "completed": False,
+            "active": False,
         },
     ]
 
@@ -395,7 +414,15 @@ def test_current_round_progress_preserves_group_order_and_counts(monkeypatch, tm
     experiment_internal = importlib.import_module("public_goods._experiment")
     session_id = "progress-helper-session"
 
-    insert_session(app_module, session_id, locked=1, current_round=11, round_open=1, action_open=1)
+    insert_session(
+        app_module,
+        session_id,
+        locked=1,
+        current_round=11,
+        current_phase="reward",
+        round_open=1,
+        action_open=1,
+    )
     insert_students(
         app_module,
         session_id,

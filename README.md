@@ -304,7 +304,7 @@ Important notes:
 6. Share join link: `https://public-goods.azurewebsites.net/join/<session_id>`
 7. Lock groups (random assignment; groups constrained to 3-7 students, target 5)
 8. For each round:
-   - Open current round (contribution stage)
+   - Choose Baseline, Punishment, or Reward, then open the current round; the choice is locked once the round opens
    - Students submit contribution (`0-10`)
    - Baseline round: close and compute directly
    - Reward/Punishment round: open action stage, let students submit/update actions, then compute when ready

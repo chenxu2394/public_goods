@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from ..config import ACTION_COST, PUNISH_EFFECT, REWARD_EFFECT
 from ..db import db, now_iso
 from .grouping import assign_late_joiner
-from .phases import phase_for_round
+from .phases import phase_context_conn
 
 
 def compute_results(session_id: str, round_no: int):
@@ -19,7 +19,13 @@ def compute_results(session_id: str, round_no: int):
 
     multiplier = float(sess["multiplier"])
     endowment = int(sess["endowment"])
-    phase, phase_round = phase_for_round(round_no)
+    if int(sess["current_round"]) != round_no:
+        conn.close()
+        raise HTTPException(400, "Only the current round can be computed.")
+    phase, phase_round = phase_context_conn(conn, sess)
+    if phase is None or phase_round is None:
+        conn.close()
+        raise HTTPException(400, "Choose a round type before computing this round.")
 
     if int(sess["locked"]) == 1:
         assign_late_joiner(session_id)
@@ -55,21 +61,34 @@ def compute_results(session_id: str, round_no: int):
 
     prev = conn.execute(
         """
-        SELECT student_id, cumulative FROM results
-        WHERE session_id=? AND round_no=?
+        SELECT r.student_id, r.cumulative
+        FROM results r
+        JOIN (
+            SELECT student_id, MAX(round_no) AS round_no
+            FROM results
+            WHERE session_id=? AND round_no<?
+            GROUP BY student_id
+        ) latest ON latest.student_id=r.student_id AND latest.round_no=r.round_no
+        WHERE r.session_id=?
     """,
-        (session_id, round_no - 1),
+        (session_id, round_no, session_id),
     ).fetchall()
     prev_cum = {row["student_id"]: float(row["cumulative"]) for row in prev}
     prev_phase_cum: Dict[str, float] = {}
     if phase_round > 1:
         prev_phase_rows = conn.execute(
             """
-            SELECT student_id, phase_cumulative
-            FROM results
-            WHERE session_id=? AND round_no=?
+            SELECT r.student_id, r.phase_cumulative
+            FROM results r
+            JOIN (
+                SELECT student_id, MAX(round_no) AS round_no
+                FROM results
+                WHERE session_id=? AND phase=? AND round_no<?
+                GROUP BY student_id
+            ) latest ON latest.student_id=r.student_id AND latest.round_no=r.round_no
+            WHERE r.session_id=? AND r.phase=?
         """,
-            (session_id, round_no - 1),
+            (session_id, phase, round_no, session_id, phase),
         ).fetchall()
         prev_phase_cum = {row["student_id"]: float(row["phase_cumulative"]) for row in prev_phase_rows}
 

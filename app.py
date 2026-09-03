@@ -57,8 +57,10 @@ from public_goods.experiment import (  # noqa: E402
     next_round_after_compute,
     open_action_stage,
     open_round,
+    phase_context_conn,
     phase_for_round,
     phase_round_count_for_session,
+    selected_phase,
 )
 from public_goods.main import app  # noqa: E402
 from public_goods.sessions import (  # noqa: E402
@@ -147,9 +149,11 @@ __all__ = [
     "next_round_after_compute",
     "open_action_stage",
     "open_round",
+    "phase_context_conn",
     "parse_whitelist_csv",
     "phase_for_round",
     "phase_round_count_for_session",
+    "selected_phase",
     "random",
     "rotate_session_join_token",
     "session_counts",

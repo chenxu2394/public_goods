@@ -67,7 +67,7 @@ PASSWORD_HASH_ITERATIONS = 200_000
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "https://public-goods.azurewebsites.net").rstrip("/")
 
 PHASE_ROUNDS = 10
-PHASES = ("baseline", "reward", "punishment")
+PHASES = ("baseline", "punishment", "reward")
 PHASE_LABELS = {
     "baseline": "Baseline",
     "reward": "Reward",

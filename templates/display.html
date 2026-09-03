@@ -42,7 +42,9 @@ async function fetchDisplayStatus(){
   const data = await res.json();
 
   document.getElementById("cur_round").innerText = data.session.current_round;
-  document.getElementById("phase_badge").innerText = `${data.session.phase_label} ${data.session.phase_round}/10`;
+  document.getElementById("phase_badge").innerText = data.session.phase === null
+    ? data.session.phase_label
+    : `${data.session.phase_label} · type round ${data.session.phase_round}`;
 
   const stageBadge = document.getElementById("stage_badge");
   stageBadge.innerText = stageText(data.session.stage);

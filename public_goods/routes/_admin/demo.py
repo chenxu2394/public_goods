@@ -10,7 +10,7 @@ from ...demo import (
     simulate_demo_current_phase,
     simulate_demo_current_round,
 )
-from ...experiment import ensure_int, open_action_stage as open_action_stage_for_session, open_round as open_round_for_session, phase_for_round, phase_label, stage_of_session
+from ...experiment import ensure_int, open_action_stage as open_action_stage_for_session, phase_label, selected_phase, stage_of_session
 from ..._sessions import get_session
 from ..helpers import require_management_session
 from .common import session_panel_response
@@ -52,8 +52,7 @@ def admin_demo_fill_contributions(request: Request, session_id: str):
         if int(sess["demo_mode"]) != 1:
             raise HTTPException(400, "Enable demo mode on a fresh session before using demo automation.")
         if stage_of_session(sess) == "closed":
-            open_round_for_session(session_id, int(sess["current_round"]))
-            sess = get_session(session_id)
+            raise HTTPException(400, "Choose a round type and open the contribution stage first.")
         filled = simulate_demo_contributions(session_id, int(sess["current_round"]))
     except HTTPException as exc:
         updated_sess = get_session(session_id)
@@ -79,7 +78,7 @@ def admin_demo_fill_actions(request: Request, session_id: str):
         if int(sess["demo_mode"]) != 1:
             raise HTTPException(400, "Enable demo mode on a fresh session before using demo automation.")
         round_no = int(sess["current_round"])
-        phase, _ = phase_for_round(round_no)
+        phase = selected_phase(sess)
         if stage_of_session(sess) == "contribution" and phase in {"reward", "punishment"}:
             open_action_stage_for_session(session_id)
             sess = get_session(session_id)
@@ -140,6 +139,7 @@ def admin_demo_run_current_phase(request: Request, session_id: str):
         user,
         updated_sess,
         demo_success=(
-            f"Demo autoplay completed {summary['phase_label']} with {summary['rounds_simulated']} auto-simulated rounds."
+            f"Demo autoplay completed the remaining rounds as {summary['phase_label']} "
+            f"with {summary['rounds_simulated']} auto-simulated rounds."
         ),
     )

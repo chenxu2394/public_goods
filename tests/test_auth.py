@@ -1787,15 +1787,8 @@ def test_reward_visibility_resets_each_round_and_action_points_are_capped(monkey
         session_id, students = _setup_grouped_session(client, app_module, "Visibility Session")
 
         response = client.post(
-            f"/admin/{session_id}/switch_phase",
-            data={"phase": "reward"},
-            follow_redirects=False,
-        )
-        assert response.status_code == 303
-
-        response = client.post(
             f"/admin/{session_id}/open_round",
-            data={"round_no": "11"},
+            data={"round_no": "1", "phase": "reward"},
             follow_redirects=False,
         )
         assert response.status_code == 303
@@ -1840,7 +1833,7 @@ def test_reward_visibility_resets_each_round_and_action_points_are_capped(monkey
 
         response = client.post(
             f"/admin/{session_id}/open_round",
-            data={"round_no": "12"},
+            data={"round_no": "2", "phase": "reward"},
             follow_redirects=False,
         )
         assert response.status_code == 303
@@ -1877,7 +1870,7 @@ def test_phase_cumulative_resets_and_completed_phase_reports_are_retained(monkey
         for round_no in range(1, 11):
             response = client.post(
                 f"/admin/{session_id}/open_round",
-                data={"round_no": str(round_no)},
+                data={"round_no": str(round_no), "phase": "baseline"},
                 follow_redirects=False,
             )
             assert response.status_code == 303
@@ -1891,7 +1884,7 @@ def test_phase_cumulative_resets_and_completed_phase_reports_are_retained(monkey
 
         response = client.post(
             f"/admin/{session_id}/open_round",
-            data={"round_no": "11"},
+            data={"round_no": "11", "phase": "reward"},
             follow_redirects=False,
         )
         assert response.status_code == 303
@@ -1923,16 +1916,9 @@ def test_phase_cumulative_resets_and_completed_phase_reports_are_retained(monkey
         assert status.status_code == 200
         payload = status.json()
 
-        assert payload["current_phase"]["phase"] == "reward"
-        assert payload["current_phase"]["latest_round"] == 11
-        assert payload["current_phase"]["latest_phase_round"] == 1
-        assert payload["current_phase"]["student_latest_income"] == 10.0
-        assert payload["current_phase"]["student_latest_contrib"] == 1
-        assert payload["current_phase"]["group_latest_income"] == 35.0
-        assert payload["current_phase"]["group_latest_contrib"] == 6
-        assert payload["current_phase"]["student_phase_cumulative"] == 10.0
-        assert payload["current_phase"]["group_phase_cumulative"] == 35.0
-        assert [phase["phase"] for phase in payload["completed_phases"]] == ["baseline"]
+        assert payload["current_phase"]["phase"] is None
+        assert payload["current_phase"]["latest_round"] is None
+        assert [phase["phase"] for phase in payload["completed_phases"]] == ["baseline", "reward"]
         assert payload["completed_phases"][0]["student_summary"]["final_phase_cumulative"] == 140.0
 
         teacher_panel = client.get(f"/admin/{session_id}")
@@ -1975,6 +1961,12 @@ def test_teacher_can_seed_demo_class_and_run_demo_round(monkeypatch, tmp_path: P
         assert counts["students"] == 12
         assert counts["whitelist"] == 12
 
+        response = client.post(
+            f"/admin/{session_id}/open_round",
+            data={"round_no": "1", "phase": "baseline"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
         response = client.post(f"/admin/{session_id}/demo/run_current_round", follow_redirects=False)
         assert response.status_code == 200
         assert "Demo ran round 1" in response.text
@@ -2010,18 +2002,18 @@ def test_demo_autoplay_current_phase_advances_reward_phase(monkeypatch, tmp_path
         _create_demo_class(client, session_id, student_count=15)
 
         response = client.post(
-            f"/admin/{session_id}/switch_phase",
-            data={"phase": "reward"},
+            f"/admin/{session_id}/open_round",
+            data={"round_no": "1", "phase": "reward"},
             follow_redirects=False,
         )
         assert response.status_code == 303
 
         response = client.post(f"/admin/{session_id}/demo/run_current_phase", follow_redirects=False)
         assert response.status_code == 200
-        assert "Demo autoplay completed Reward" in response.text
+        assert "Demo autoplay completed the remaining rounds as Reward" in response.text
 
         session_row = app_module.get_session(session_id)
-        assert int(session_row["current_round"]) == 21
+        assert int(session_row["current_round"]) == 30
 
         conn = sqlite3.connect(app_module.DB_PATH)
         reward_rounds = conn.execute(
@@ -2029,10 +2021,10 @@ def test_demo_autoplay_current_phase_advances_reward_phase(monkeypatch, tmp_path
             (session_id,),
         ).fetchone()[0]
         reward_actions = conn.execute(
-            "SELECT COUNT(*) FROM actions WHERE session_id=? AND round_no BETWEEN 11 AND 20",
+            "SELECT COUNT(*) FROM actions WHERE session_id=? AND round_no BETWEEN 1 AND 30",
             (session_id,),
         ).fetchone()[0]
         conn.close()
 
-        assert reward_rounds == 10
+        assert reward_rounds == 30
         assert reward_actions > 0

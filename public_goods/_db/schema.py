@@ -42,6 +42,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
         created_at TEXT NOT NULL,
         locked INTEGER NOT NULL DEFAULT 0,
         current_round INTEGER NOT NULL DEFAULT 1,
+        current_phase TEXT,
         round_open INTEGER NOT NULL DEFAULT 0,
         action_open INTEGER NOT NULL DEFAULT 0,
         demo_mode INTEGER NOT NULL DEFAULT 0,

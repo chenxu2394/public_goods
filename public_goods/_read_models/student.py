@@ -6,9 +6,9 @@ from ..db import db
 from .._experiment import (
     build_phase_status,
     build_student_phase_report_conn,
+    phase_context_conn,
     phase_computed_counts_conn,
-    phase_for_round,
-    phase_round_count_for_session,
+    phase_label,
     stage_of_session,
 )
 from .._sessions import get_session
@@ -27,12 +27,21 @@ def build_student_status_payload(session_id: str, student_id: str) -> StudentSta
         raise HTTPException(404, "student not found")
 
     cur_r = int(sess["current_round"])
-    phase, phase_round = phase_for_round(cur_r)
     stage = stage_of_session(sess)
     total_rounds = int(sess["rounds"])
     computed_counts = phase_computed_counts_conn(conn, session_id)
-    phase_statuses = build_phase_status(total_rounds, computed_counts)
-    current_phase_report = build_student_phase_report_conn(conn, session_id, str(stu["id"]), phase)
+    phase, phase_round = phase_context_conn(conn, sess)
+    computed_rounds = sum(computed_counts.values())
+    phase_statuses = build_phase_status(
+        total_rounds,
+        computed_counts,
+        active_phase=phase if computed_rounds < total_rounds else None,
+    )
+    current_phase_report = (
+        build_student_phase_report_conn(conn, session_id, str(stu["id"]), phase)
+        if phase is not None
+        else None
+    )
 
     cur_c = conn.execute(
         """
@@ -82,7 +91,7 @@ def build_student_status_payload(session_id: str, student_id: str) -> StudentSta
 
     completed_phases = []
     for phase_status in phase_statuses:
-        if not phase_status["completed"]:
+        if int(phase_status["computed_rounds"]) <= 0:
             continue
         report = build_student_phase_report_conn(conn, session_id, str(stu["id"]), str(phase_status["phase"]))
         if report is None:
@@ -93,10 +102,10 @@ def build_student_status_payload(session_id: str, student_id: str) -> StudentSta
 
     current_phase_summary = {
         "phase": phase,
-        "phase_label": phase.title(),
+        "phase_label": phase_label(phase) if phase is not None else "Not selected",
         "phase_round": phase_round,
-        "computed_rounds": int(computed_counts.get(phase, 0)),
-        "total_rounds": phase_round_count_for_session(total_rounds, phase),
+        "computed_rounds": int(computed_counts.get(phase, 0)) if phase is not None else 0,
+        "total_rounds": None,
         "latest_round": None,
         "latest_phase_round": None,
         "student_latest_income": 0.0,

@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from ..config import MAX_ACTION_POINTS
 from ..db import db, now_iso
-from .._experiment import phase_for_round
+from .._experiment import selected_phase
 from .utils import _demo_profile_for_student
 
 
@@ -57,7 +57,7 @@ def simulate_demo_actions(session_id: str, round_no: int) -> int:
         if int(sess["action_open"]) != 1:
             raise HTTPException(400, "Action stage must be open before auto-submitting demo actions.")
 
-        phase, _ = phase_for_round(round_no)
+        phase = selected_phase(sess)
         if phase not in {"reward", "punishment"}:
             raise HTTPException(400, "Baseline rounds do not have reward or punishment actions.")
 

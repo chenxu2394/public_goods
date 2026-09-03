@@ -29,6 +29,7 @@ def _insert_admin_owned_session_copy_conn(
     title_suffix: str,
     locked: int,
     current_round: int,
+    current_phase: str | None,
     round_open: int,
     action_open: int,
 ) -> str:
@@ -45,10 +46,10 @@ def _insert_admin_owned_session_copy_conn(
         """
         INSERT INTO sessions(
             id, title, group_size, multiplier, endowment, rounds, created_at,
-            locked, current_round, round_open, action_open, join_token,
+            locked, current_round, current_phase, round_open, action_open, join_token,
             owner_user_id, teacher_removed_at, teacher_removed_by_user_id
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """,
         (
             new_session_id,
@@ -60,6 +61,7 @@ def _insert_admin_owned_session_copy_conn(
             created_at,
             int(locked),
             int(current_round),
+            current_phase,
             int(round_open),
             int(action_open),
             join_token,
@@ -100,6 +102,7 @@ def _duplicate_session_conn(conn: sqlite3.Connection, session_id: str) -> str:
         title_suffix=" (Copy)",
         locked=int(sess["locked"]),
         current_round=int(sess["current_round"]),
+        current_phase=sess["current_phase"],
         round_open=int(sess["round_open"]),
         action_open=int(sess["action_open"]),
     )
@@ -268,9 +271,9 @@ def _duplicate_session_setup_conn(conn: sqlite3.Connection, session_id: str) -> 
         title_suffix=" (Setup Copy)",
         locked=0,
         current_round=1,
+        current_phase=None,
         round_open=0,
         action_open=0,
     )
     _copy_whitelist_conn(conn, session_id, new_session_id)
     return new_session_id
-

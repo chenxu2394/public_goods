@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import HTTPException
 
 from ..db import db, now_iso
-from .._experiment import phase_for_round
+from .._experiment import selected_phase
 from .utils import _demo_profile_for_student, _stable_int
 
 
@@ -85,7 +85,9 @@ def simulate_demo_contributions(session_id: str, round_no: int) -> int:
         if int(sess["round_open"]) != 1 or int(sess["action_open"]) == 1:
             raise HTTPException(400, "Contribution stage must be open before auto-submitting contributions.")
 
-        phase, _ = phase_for_round(round_no)
+        phase = selected_phase(sess)
+        if phase is None:
+            raise HTTPException(400, "Choose a round type before auto-submitting demo contributions.")
         endowment = int(sess["endowment"])
         students = conn.execute(
             """

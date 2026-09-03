@@ -17,11 +17,10 @@ from ..db import db
 from .._experiment import (
     build_phase_status,
     build_teacher_phase_reports_conn,
-    count_computed_rounds,
     current_round_contrib_rows_conn,
     current_round_progress_conn,
+    phase_context_conn,
     phase_computed_counts_conn,
-    phase_for_round,
     round_context,
     stage_of_session,
 )
@@ -71,10 +70,15 @@ def build_session_panel_context(
     conn = db()
     total_rounds = int(sess["rounds"])
     round_no = int(sess["current_round"])
-    phase, _ = phase_for_round(round_no)
     stage = stage_of_session(sess)
     computed_counts = phase_computed_counts_conn(conn, str(sess["id"]))
-    phase_statuses = build_phase_status(total_rounds, computed_counts)
+    computed_rounds = sum(computed_counts.values())
+    phase, phase_round = phase_context_conn(conn, sess)
+    phase_statuses = build_phase_status(
+        total_rounds,
+        computed_counts,
+        active_phase=phase if computed_rounds < total_rounds else None,
+    )
     round_progress = current_round_progress_conn(conn, str(sess["id"]), round_no)
     current_round_contrib_rows = (
         current_round_contrib_rows_conn(conn, str(sess["id"]), round_no)
@@ -103,8 +107,13 @@ def build_session_panel_context(
         "export_url": export_url,
         "template_url": template_url,
         "display_url": display_url,
-        "round_ctx": round_context(sess),
-        "computed_rounds": count_computed_rounds(str(sess["id"])),
+        "round_ctx": round_context(
+            sess,
+            phase,
+            phase_round,
+            computed_rounds=computed_rounds,
+        ),
+        "computed_rounds": computed_rounds,
         "phase_statuses": phase_statuses,
         "round_progress": round_progress,
         "current_round_contrib_rows": current_round_contrib_rows,

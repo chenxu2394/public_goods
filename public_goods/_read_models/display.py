@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..db import db
-from .._experiment import phase_for_round, stage_of_session
+from .._experiment import phase_context_conn, phase_label, stage_of_session
 from .._sessions import get_session
 from .types import DisplayStatusPayload
 
@@ -9,10 +9,10 @@ from .types import DisplayStatusPayload
 def build_display_status_payload(session_id: str) -> DisplayStatusPayload:
     sess = get_session(session_id)
     cur_round = int(sess["current_round"])
-    phase, phase_round = phase_for_round(cur_round)
     stage = stage_of_session(sess)
 
     conn = db()
+    phase, phase_round = phase_context_conn(conn, sess)
     latest_row = conn.execute(
         "SELECT MAX(round_no) AS r FROM results WHERE session_id=?",
         (session_id,),
@@ -66,7 +66,7 @@ def build_display_status_payload(session_id: str) -> DisplayStatusPayload:
             "rounds": int(sess["rounds"]),
             "current_round": cur_round,
             "phase": phase,
-            "phase_label": phase.title(),
+            "phase_label": phase_label(phase) if phase is not None else "Not selected",
             "phase_round": phase_round,
             "stage": stage,
         },

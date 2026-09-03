@@ -17,6 +17,7 @@ from ._experiment import (
     next_round_after_compute,
     open_action_stage,
     open_round,
+    phase_context_conn,
     phase_computed_counts_conn,
     phase_for_round,
     phase_label,
@@ -24,6 +25,7 @@ from ._experiment import (
     phase_round_count_for_session,
     phase_start_round,
     round_context,
+    selected_phase,
     stage_of_session,
 )
 
@@ -45,6 +47,7 @@ __all__ = [
     "next_round_after_compute",
     "open_action_stage",
     "open_round",
+    "phase_context_conn",
     "phase_computed_counts_conn",
     "phase_for_round",
     "phase_label",
@@ -52,5 +55,6 @@ __all__ = [
     "phase_round_count_for_session",
     "phase_start_round",
     "round_context",
+    "selected_phase",
     "stage_of_session",
 ]

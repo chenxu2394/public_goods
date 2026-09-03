@@ -118,20 +118,10 @@ def setup_grouped_session(
     return session_id, student_rows, join_token
 
 
-def switch_phase(client: TestClient, session_id: str, phase: str):
-    response = client.post(
-        f"/admin/{session_id}/switch_phase",
-        data={"phase": phase},
-        follow_redirects=False,
-    )
-    assert response.status_code == 303
-    return response
-
-
-def open_round(client: TestClient, session_id: str, round_no: int):
+def open_round(client: TestClient, session_id: str, round_no: int, phase: str = "baseline"):
     response = client.post(
         f"/admin/{session_id}/open_round",
-        data={"round_no": str(round_no)},
+        data={"round_no": str(round_no), "phase": phase},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -204,6 +194,7 @@ def insert_session(
     created_at: str = "2026-03-08T09:00:00",
     locked: int = 0,
     current_round: int = 1,
+    current_phase: str | None = None,
     round_open: int = 0,
     action_open: int = 0,
     demo_mode: int = 0,
@@ -219,9 +210,9 @@ def insert_session(
         """
         INSERT INTO sessions(
             id, title, group_size, multiplier, endowment, rounds, created_at,
-            locked, current_round, round_open, action_open, demo_mode, join_token, owner_user_id
+            locked, current_round, current_phase, round_open, action_open, demo_mode, join_token, owner_user_id
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """,
         (
             session_id,
@@ -233,6 +224,7 @@ def insert_session(
             created_at,
             locked,
             current_round,
+            current_phase,
             round_open,
             action_open,
             demo_mode,

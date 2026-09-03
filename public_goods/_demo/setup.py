@@ -48,7 +48,7 @@ def create_demo_class(session_id: str, student_count: int) -> int:
         conn.execute(
             """
             UPDATE sessions
-            SET demo_mode=1, locked=0, current_round=1, round_open=0, action_open=0
+            SET demo_mode=1, locked=0, current_round=1, current_phase=NULL, round_open=0, action_open=0
             WHERE id=?
         """,
             (session_id,),

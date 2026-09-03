@@ -5,9 +5,6 @@ import io
 from typing import Tuple
 
 from ..db import db
-from .._experiment import phase_for_round
-
-
 def build_export_csv(session_id: str, rounds: int) -> Tuple[str, bytes]:
     conn = db()
     students = conn.execute(
@@ -35,6 +32,19 @@ def build_export_csv(session_id: str, rounds: int) -> Tuple[str, bytes]:
         (session_id,),
     ).fetchall()
     result_map = {(int(row["round_no"]), row["student_id"]): row for row in result_rows}
+    sess = conn.execute(
+        "SELECT current_round, current_phase FROM sessions WHERE id=?",
+        (session_id,),
+    ).fetchone()
+    current_round = int(sess["current_round"]) if sess is not None else None
+    current_phase = str(sess["current_phase"]) if sess is not None and sess["current_phase"] else None
+    current_phase_round = None
+    if current_phase is not None and current_round is not None:
+        row = conn.execute(
+            "SELECT COUNT(DISTINCT round_no) AS c FROM results WHERE session_id=? AND phase=? AND round_no<?",
+            (session_id, current_phase, current_round),
+        ).fetchone()
+        current_phase_round = int(row["c"] or 0) + 1
     conn.close()
 
     output = io.StringIO()
@@ -59,7 +69,6 @@ def build_export_csv(session_id: str, rounds: int) -> Tuple[str, bytes]:
 
     for student in students:
         for round_no in range(1, rounds + 1):
-            default_phase, default_phase_round = phase_for_round(round_no)
             contrib = contrib_map.get((round_no, student["id"]), "")
             result_row = result_map.get((round_no, student["id"]))
             if result_row:
@@ -71,8 +80,8 @@ def build_export_csv(session_id: str, rounds: int) -> Tuple[str, bytes]:
                 action_sent = result_row["action_sent"]
                 action_received = result_row["action_received"]
             else:
-                phase = default_phase
-                phase_round = default_phase_round
+                phase = current_phase if round_no == current_round else ""
+                phase_round = current_phase_round if round_no == current_round else ""
                 income = ""
                 cumulative = ""
                 phase_cumulative = ""

@@ -4,7 +4,7 @@ import sqlite3
 from typing import Dict, List
 
 from ..config import PHASES
-from .phases import phase_label, phase_round_count_for_session
+from .phases import phase_label
 
 
 def build_teacher_phase_reports_conn(
@@ -15,8 +15,7 @@ def build_teacher_phase_reports_conn(
 ) -> List[Dict[str, object]]:
     reports = []
     for phase in PHASES:
-        phase_rounds = phase_round_count_for_session(total_rounds, phase)
-        if phase_rounds <= 0 or int(computed_counts.get(phase, 0)) < phase_rounds:
+        if int(computed_counts.get(phase, 0)) <= 0:
             continue
 
         group_rows = conn.execute(
@@ -50,7 +49,15 @@ def build_teacher_phase_reports_conn(
                    SUM(r.income) AS total_income,
                    SUM(r.action_sent) AS action_sent,
                    SUM(r.action_received) AS action_received,
-                   MAX(r.phase_cumulative) AS final_phase_cumulative
+                   MAX(
+                       CASE WHEN r.round_no=(
+                           SELECT MAX(r2.round_no)
+                           FROM results r2
+                           WHERE r2.session_id=r.session_id
+                             AND r2.student_id=r.student_id
+                             AND r2.phase=r.phase
+                       ) THEN r.phase_cumulative END
+                   ) AS final_phase_cumulative
             FROM results r
             JOIN students s ON s.id=r.student_id
             WHERE r.session_id=? AND r.phase=?
@@ -89,6 +96,7 @@ def build_teacher_phase_reports_conn(
             {
                 "phase": phase,
                 "phase_label": phase_label(phase),
+                "computed_rounds": int(computed_counts.get(phase, 0)),
                 "groups": groups,
                 "students": students,
                 "totals": {

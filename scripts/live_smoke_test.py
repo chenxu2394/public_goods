@@ -911,7 +911,14 @@ def main() -> int:
         stage = stage_from_status_payload(sample_status)
         if stage == "closed":
             try:
-                post_admin_action(site_root, session_id, "open_round", args.timeout, management_opener)
+                post_admin_action(
+                    site_root,
+                    session_id,
+                    "open_round",
+                    args.timeout,
+                    management_opener,
+                    {"phase": "reward" if args.with_actions else "baseline"},
+                )
             except RuntimeError as exc:
                 print(f"Automatic round preparation failed: {exc}")
                 return 1

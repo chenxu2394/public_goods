@@ -207,7 +207,7 @@
         <form method="post" action="/admin/{{ sess.id }}/demo/fill_contributions">
           <button type="submit">Auto-fill Contribution Stage</button>
         </form>
-        <div class="muted" style="margin-top:6px;">Opens the current round if needed, then fills any missing demo contributions.</div>
+        <div class="muted" style="margin-top:6px;">Open the round and choose its type below first, then fill any missing demo contributions.</div>
       </div>
       <div class="col">
         <form method="post" action="/admin/{{ sess.id }}/demo/fill_actions">
@@ -225,9 +225,9 @@
       </div>
       <div class="col">
         <form method="post" action="/admin/{{ sess.id }}/demo/run_current_phase">
-          <button type="submit">Autoplay Current Phase</button>
+          <button type="submit">Autoplay Remaining Rounds With Current Type</button>
         </form>
-        <div class="muted" style="margin-top:6px;">Automatically runs the remaining rounds in the current phase.</div>
+        <div class="muted" style="margin-top:6px;">Automatically runs all remaining rounds using the currently selected type.</div>
       </div>
     </div>
   {% elif counts.students == 0 and computed_rounds == 0 %}
@@ -250,7 +250,11 @@
   <h3>Round Control</h3>
   <div>
     Current total round: <b>{{ round_ctx.round }}</b> / {{ sess.rounds }}
-    <span class="pill">{{ round_ctx.phase_label }} {{ round_ctx.phase_round }} / 10</span>
+    {% if round_ctx.phase %}
+      <span class="pill">{{ round_ctx.phase_label }} · type round {{ round_ctx.phase_round }}</span>
+    {% else %}
+      <span class="pill muted">Round type not selected</span>
+    {% endif %}
     {% if round_ctx.stage == "contribution" %}
       <span class="pill ok">Contribution stage open</span>
     {% elif round_ctx.stage == "action" %}
@@ -263,15 +267,25 @@
 
   <div class="row" style="margin-top:10px;">
     <div class="col">
-      {% if round_ctx.stage == "closed" %}
+      {% if round_ctx.completed %}
+        <button type="button" disabled>Session completed</button>
+        <div class="muted" style="margin-top:6px;">All configured rounds have been computed.</div>
+      {% elif round_ctx.stage == "closed" %}
         <form method="post" action="/admin/{{ sess.id }}/open_round">
           <input type="hidden" name="round_no" value="{{ round_ctx.round }}" />
-          <button type="submit">Open contribution stage</button>
+          <label for="round-phase"><span class="muted">Round type</span></label>
+          <select id="round-phase" name="phase" required style="margin-top:6px;">
+            <option value="" selected disabled>Choose a round type</option>
+            <option value="baseline">Baseline / No intervention</option>
+            <option value="punishment">Punishment</option>
+            <option value="reward">Reward</option>
+          </select>
+          <button type="submit" style="margin-top:8px;">Choose type and open contribution stage</button>
         </form>
-        <div class="muted" style="margin-top:6px;">Students can now submit their own contributions privately.</div>
+        <div class="muted" style="margin-top:6px;">The selected type is locked as soon as the round opens.</div>
       {% else %}
         <button type="button" disabled>Open contribution stage</button>
-        <div class="muted" style="margin-top:6px;">Unavailable while a stage is already open.</div>
+        <div class="muted" style="margin-top:6px;">{{ round_ctx.phase_label }} is locked for this round.</div>
       {% endif %}
     </div>
     <div class="col">
@@ -299,17 +313,13 @@
 </div>
 
 <div class="card">
-  <h3>Phase Overview</h3>
+  <h3>Round Type Overview</h3>
   <div class="row">
     {% for status in phase_statuses %}
       <div class="col">
         <div><b>{{ status.phase_label }}</b></div>
-        <div class="muted">{{ status.computed_rounds }} / {{ status.total_rounds }} rounds computed</div>
-        {% if status.completed %}
-          <span class="pill ok">Completed</span>
-        {% else %}
-          <span class="pill muted">In progress</span>
-        {% endif %}
+        <div class="muted">{{ status.computed_rounds }} rounds computed</div>
+        {% if status.active %}<span class="pill ok">Current round type</span>{% endif %}
       </div>
     {% endfor %}
   </div>
@@ -368,7 +378,7 @@
 
 {% for report in phase_reports %}
 <div class="card">
-  <h3>{{ report.phase_label }} Results</h3>
+  <h3>{{ report.phase_label }} Results ({{ report.computed_rounds }} rounds)</h3>
   <div class="row">
     <div class="col">
       <div class="muted">Phase total contribution</div>

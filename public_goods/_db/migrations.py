@@ -32,6 +32,7 @@ def apply_schema_migrations(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "users", "identity_subject", "TEXT")
 
     _ensure_column(conn, "sessions", "action_open", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "sessions", "current_phase", "TEXT")
     _ensure_column(conn, "sessions", "demo_mode", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "sessions", "join_token", "TEXT")
     _ensure_column(conn, "sessions", "owner_user_id", "TEXT")
@@ -50,6 +51,14 @@ def apply_schema_migrations(conn: sqlite3.Connection) -> None:
 
 
 def backfill_result_phase_fields(conn: sqlite3.Connection) -> None:
+    migration_key = "result_phase_fields_backfilled_v1"
+    already_backfilled = conn.execute(
+        "SELECT 1 FROM settings WHERE key=?",
+        (migration_key,),
+    ).fetchone()
+    if already_backfilled:
+        return
+
     result_rows = conn.execute(
         """
         SELECT id, session_id, student_id, round_no, income
@@ -75,3 +84,35 @@ def backfill_result_phase_fields(conn: sqlite3.Connection) -> None:
         """,
             phase_updates,
         )
+    conn.execute(
+        "INSERT OR REPLACE INTO settings(key, value) VALUES(?, '1')",
+        (migration_key,),
+    )
+
+
+def backfill_active_session_phases(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT id, current_round, round_open, action_open
+        FROM sessions
+        WHERE current_phase IS NULL
+    """
+    ).fetchall()
+    updates = []
+    for row in rows:
+        result = conn.execute(
+            """
+            SELECT phase
+            FROM results
+            WHERE session_id=? AND round_no=?
+            LIMIT 1
+        """,
+            (row["id"], row["current_round"]),
+        ).fetchone()
+        if result is not None:
+            updates.append((result["phase"], row["id"]))
+        elif int(row["round_open"]) == 1 or int(row["action_open"]) == 1:
+            phase, _ = phase_for_round(int(row["current_round"]))
+            updates.append((phase, row["id"]))
+    if updates:
+        conn.executemany("UPDATE sessions SET current_phase=? WHERE id=?", updates)

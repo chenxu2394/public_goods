@@ -6,12 +6,14 @@ from .phase_status import build_phase_status, count_computed_rounds, phase_compu
 from .phases import (
     ensure_int,
     next_round_after_compute,
+    phase_context_conn,
     phase_for_round,
     phase_label,
     phase_round_bounds_for_session,
     phase_round_count_for_session,
     phase_start_round,
     round_context,
+    selected_phase,
     stage_of_session,
 )
 from .progress import current_round_contrib_rows_conn, current_round_progress_conn
@@ -37,6 +39,7 @@ __all__ = [
     "next_round_after_compute",
     "open_action_stage",
     "open_round",
+    "phase_context_conn",
     "phase_computed_counts_conn",
     "phase_for_round",
     "phase_label",
@@ -44,5 +47,6 @@ __all__ = [
     "phase_round_count_for_session",
     "phase_start_round",
     "round_context",
+    "selected_phase",
     "stage_of_session",
 ]

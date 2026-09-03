@@ -6,7 +6,7 @@ from fastapi import HTTPException
 
 from ..config import MAX_ACTION_POINTS
 from ..db import _run_write_with_retry, now_iso
-from .._experiment import ensure_int, phase_for_round
+from .._experiment import ensure_int, selected_phase
 from .._sessions import get_session
 
 
@@ -16,7 +16,7 @@ def submit_student_actions(session_id: str, payload: object) -> dict[str, object
         raise HTTPException(400, "Action stage is not open")
 
     round_no = int(sess["current_round"])
-    phase, _ = phase_for_round(round_no)
+    phase = selected_phase(sess)
     if phase not in ("reward", "punishment"):
         raise HTTPException(400, "Current round has no reward/punishment stage")
 

@@ -12,15 +12,15 @@
 </div>
 
 <div class="card">
-  <h3>Current Phase / 当前情境</h3>
+  <h3>Current Round Type / 当前轮次类型</h3>
   <div>
     Total round / 总轮次: <b id="cur_round">{{ sess.current_round }}</b> / {{ sess.rounds }}
     <span class="pill" id="phase_badge">-</span>
     <span class="pill" id="stage_badge">-</span>
   </div>
   <div class="muted" style="margin-top:6px;">
-    Phase progress / 情境进度:
-    <b id="phase_progress">0 / 10</b>
+    Completed rounds of this type / 本情境已完成轮数:
+    <b id="phase_progress">0</b>
   </div>
   <div class="row" style="margin-top:12px;">
     <div class="col">
@@ -63,7 +63,7 @@
     </div>
   </div>
   <div style="margin-top:10px;">
-    <span class="muted">Phase completion / 情境完成情况:</span>
+    <span class="muted">Completed rounds by type / 各情境已完成轮数:</span>
     <span id="phase_statuses"></span>
   </div>
 </div>
@@ -113,8 +113,8 @@
 </div>
 
 <div class="card">
-  <h3>Completed Phase Results / 已完成情境结果</h3>
-  <div class="muted">Each phase remains visible after it finishes. / 每个情境完成后结果会保留显示。</div>
+  <h3>Results by Round Type / 各轮次类型结果</h3>
+  <div class="muted">Results remain grouped by the type selected for each round. / 结果会按照每轮选择的情境类型分组保留。</div>
   <div id="completed_phases" style="margin-top:12px;"></div>
 </div>
 
@@ -144,7 +144,9 @@ function phaseLabelText(phaseLabel){
 
 function setPhaseAndStage(session){
   const phaseBadge = document.getElementById("phase_badge");
-  phaseBadge.innerText = `${phaseLabelText(session.phase_label)} ${session.phase_round}`;
+  phaseBadge.innerText = session.phase === null
+    ? `${phaseLabelText(session.phase_label)} / 等待教师选择`
+    : `${phaseLabelText(session.phase_label)} · ${session.phase_round}`;
   const stageBadge = document.getElementById("stage_badge");
   stageBadge.innerText = stageText(session.stage);
   stageBadge.className = "pill " + (session.stage === "contribution" ? "ok" : (session.stage === "action" ? "warn" : "muted"));
@@ -155,15 +157,15 @@ function renderPhaseStatuses(statuses){
   container.innerHTML = "";
   statuses.forEach(status => {
     const span = document.createElement("span");
-    span.className = "pill " + (status.completed ? "ok" : "muted");
+    span.className = "pill " + (status.active ? "ok" : "muted");
     span.style.marginLeft = "8px";
-    span.innerText = `${phaseLabelText(status.phase_label)} ${status.computed_rounds}/${status.total_rounds}`;
+    span.innerText = `${phaseLabelText(status.phase_label)} ${status.computed_rounds}`;
     container.appendChild(span);
   });
 }
 
 function renderCurrentPhase(summary){
-  document.getElementById("phase_progress").innerText = `${summary.computed_rounds} / ${summary.total_rounds}`;
+  document.getElementById("phase_progress").innerText = summary.computed_rounds;
   document.getElementById("latest_round_summary").innerText = summary.latest_round === null ? "-" : `${summary.latest_round} / ${summary.latest_phase_round}`;
   document.getElementById("student_latest_income").innerText = summary.student_latest_income.toFixed(2);
   document.getElementById("student_latest_contrib").innerText = summary.student_latest_contrib;
@@ -291,7 +293,7 @@ function renderCompletedPhases(phases){
   container.innerHTML = "";
 
   if(phases.length === 0){
-    container.innerHTML = '<div class="muted">No completed phase yet. / 尚无已完成情境。</div>';
+    container.innerHTML = '<div class="muted">No completed rounds yet. / 尚无已完成轮次。</div>';
     return;
   }
 
@@ -341,7 +343,7 @@ function renderCompletedPhases(phases){
       </div>
       <div class="row" style="margin-top:12px;">
         <div class="col">
-          <h5 style="margin:0 0 8px 0;">Your 10-round performance / 你的10轮表现</h5>
+          <h5 style="margin:0 0 8px 0;">Your performance for this type / 你在此情境下的表现</h5>
           <div style="overflow:auto;">
             <table>
               <tr><th>Phase Round / 情境轮次</th><th>Contribution / 贡献</th><th>Income / 收益</th><th>Phase Cumulative / 情境累计收益</th><th>Sent / 发出</th><th>Received / 收到</th></tr>
@@ -350,7 +352,7 @@ function renderCompletedPhases(phases){
           </div>
         </div>
         <div class="col">
-          <h5 style="margin:0 0 8px 0;">Group 10-round performance / 小组10轮表现</h5>
+          <h5 style="margin:0 0 8px 0;">Group performance for this type / 小组在此情境下的表现</h5>
           <div style="overflow:auto;">
             <table>
               <tr><th>Phase Round / 情境轮次</th><th>Group Total / 组总贡献</th><th>Group Income / 组总收益</th><th>Average Contribution / 平均贡献</th></tr>
