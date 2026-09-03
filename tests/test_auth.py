@@ -933,6 +933,84 @@ def test_admin_can_disable_enable_and_reset_teacher_password(monkeypatch, tmp_pa
             assert reset_response.headers["location"] == "/admin/login"
 
 
+def test_admin_can_remove_teacher_and_reassign_sessions(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher_temp = _create_teacher(client, "Teacher1")
+        teacher = app_module.get_user_by_username("Teacher1")
+        admin = app_module.get_user_by_username("admin")
+        assert teacher is not None
+        assert admin is not None
+
+        admin_home = client.get("/admin")
+        assert f'/admin/teachers/{teacher["id"]}/delete' in admin_home.text
+        assert 'data-delete-mode="teacher"' in admin_home.text
+        assert "all sessions they own will be moved to admin" in admin_home.text
+
+        assert _login(client, "Teacher1", teacher_temp).status_code == 303
+        assert _change_password(client, teacher_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+        teacher_cookie = client.cookies.get(app_module.AUTH_COOKIE_NAME)
+        assert teacher_cookie
+        session_ids = [
+            _create_session(client, "Teacher Session One"),
+            _create_session(client, "Teacher Session Two"),
+        ]
+
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        response = client.post(
+            f'/admin/teachers/{teacher["id"]}/delete',
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == "/admin"
+
+        assert app_module.get_user_by_username("Teacher1") is None
+        for session_id in session_ids:
+            session_row = app_module.get_session(session_id)
+            assert session_row["owner_user_id"] == admin["id"]
+            assert session_row["owner_username"] == "admin"
+            assert session_row["teacher_removed_at"] is None
+            assert session_row["teacher_removed_by_user_id"] is None
+
+        with TestClient(app_module.app) as stale_client:
+            stale_client.cookies.set(app_module.AUTH_COOKIE_NAME, teacher_cookie)
+            stale_response = stale_client.get("/admin", follow_redirects=False)
+            assert stale_response.status_code == 303
+            assert stale_response.headers["location"] == "/admin/login"
+
+
+def test_teacher_cannot_remove_another_teacher(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher1_temp = _create_teacher(client, "Teacher1")
+        _create_teacher(client, "Teacher2")
+        teacher2 = app_module.get_user_by_username("Teacher2")
+        assert teacher2 is not None
+
+        assert _login(client, "Teacher1", teacher1_temp).status_code == 303
+        assert _change_password(client, teacher1_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+
+        response = client.post(f'/admin/teachers/{teacher2["id"]}/delete')
+        assert response.status_code == 404
+        assert app_module.get_user_by_username("Teacher2") is not None
+
+
 def test_admin_can_transfer_session_to_teacher(monkeypatch, tmp_path: Path):
     app_module, _ = _load_app(
         monkeypatch,

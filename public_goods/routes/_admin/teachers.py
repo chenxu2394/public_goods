@@ -11,6 +11,7 @@ from ..._sessions import (
     _get_teacher_or_404,
     create_microsoft_user,
     create_user,
+    remove_teacher_and_reassign_sessions,
     set_user_disabled,
     set_user_password,
 )
@@ -89,6 +90,16 @@ def admin_enable_teacher(request: Request, user_id: str):
 
     teacher = _get_teacher_or_404(user_id)
     set_user_disabled(str(teacher["id"]), False)
+    return RedirectResponse(url="/admin", status_code=303)
+
+
+@router.post("/admin/teachers/{user_id}/delete")
+def admin_remove_teacher(request: Request, user_id: str):
+    user, gate = require_admin_user(request)
+    if gate:
+        return gate
+
+    remove_teacher_and_reassign_sessions(user_id)
     return RedirectResponse(url="/admin", status_code=303)
 
 

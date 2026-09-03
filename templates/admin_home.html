@@ -11,7 +11,7 @@
 
 <div id="delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000; align-items:center; justify-content:center;">
   <div style="background:#fff; border-radius:12px; padding:28px 32px; max-width:480px; width:90%; box-shadow:0 4px 24px rgba(0,0,0,0.18);">
-    <h3 id="delete-modal-title" style="margin:0 0 12px 0;">Delete Session</h3>
+    <h3 id="delete-modal-title" style="margin:0 0 12px 0;"></h3>
     <p id="delete-modal-message" style="margin:0 0 20px 0;"></p>
     <div style="display:flex; gap:12px; justify-content:flex-end;">
       <button type="button" id="delete-modal-cancel" onclick="closeDeleteModal()" style="background:#f0f0f0; border-color:#ccc;">Cancel</button>
@@ -27,13 +27,25 @@
     pendingDeleteForm = form;
     deleteModalTrigger = document.activeElement;
     var mode = form.dataset.deleteMode || 'delete';
+    var modalTitle;
     var message;
-    if (mode === 'archive') {
+    var confirmLabel;
+    if (mode === 'teacher') {
+      modalTitle = 'Remove Teacher';
+      message = 'Remove teacher "' + title + '"? Their account will be deleted and all sessions they own will be moved to admin. This cannot be undone.';
+      confirmLabel = 'Remove Teacher';
+    } else if (mode === 'archive') {
+      modalTitle = 'Remove Session';
       message = 'Remove the session "' + title + '" from your list?';
+      confirmLabel = 'Remove Session';
     } else {
+      modalTitle = 'Delete Session';
       message = 'Are you sure you want to delete the session "' + title + '"? This cannot be undone.';
+      confirmLabel = 'Delete Session';
     }
+    document.getElementById('delete-modal-title').textContent = modalTitle;
     document.getElementById('delete-modal-message').textContent = message;
+    document.getElementById('delete-modal-confirm').textContent = confirmLabel;
     var modal = document.getElementById('delete-modal');
     modal.style.display = 'flex';
     document.getElementById('delete-modal-cancel').focus();
@@ -176,6 +188,9 @@
                   <button type="submit">Reset Password</button>
                 </form>
               {% endif %}
+              <form method="post" action="/admin/teachers/{{ teacher.id }}/delete" data-delete-mode="teacher" style="display:inline; margin-left:8px;">
+                <button type="button" onclick='openDeleteModal(this.form, {{ (teacher.email or teacher.username)|tojson }})' style="background:#c00; color:#fff; border-color:#a00;">Remove</button>
+              </form>
             </td>
           </tr>
         {% endfor %}

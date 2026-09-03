@@ -38,6 +38,7 @@ from .users import (
     get_user_by_id,
     get_user_by_username,
     list_teachers,
+    remove_teacher_and_reassign_sessions,
     set_user_disabled,
     set_user_password,
 )
@@ -86,6 +87,7 @@ __all__ = [
     "list_students",
     "list_teachers",
     "parse_whitelist_csv",
+    "remove_teacher_and_reassign_sessions",
     "rotate_session_join_token",
     "session_counts",
     "set_session_title",

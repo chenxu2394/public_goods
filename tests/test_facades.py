@@ -21,6 +21,7 @@ def test_public_facades_reexport_expected_helpers():
     assert callable(sessions_module.upsert_joined_student)
     assert callable(sessions_module.duplicate_session_as_admin)
     assert callable(sessions_module.duplicate_session_setup_as_admin)
+    assert callable(sessions_module.remove_teacher_and_reassign_sessions)
 
 
 def test_admin_router_facade_includes_expected_paths():
@@ -29,6 +30,7 @@ def test_admin_router_facade_includes_expected_paths():
     assert "/admin/login" in paths
     assert "/admin" in paths
     assert "/admin/create" in paths
+    assert "/admin/teachers/{user_id}/delete" in paths
     assert "/admin/{session_id}" in paths
     assert "/admin/{session_id}/export" in paths
     assert "/admin/{session_id}/demo/run_current_phase" in paths

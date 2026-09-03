@@ -305,6 +305,43 @@ def set_user_disabled(user_id: str, disabled: bool) -> None:
         conn.close()
 
 
+def remove_teacher_and_reassign_sessions(user_id: str) -> int:
+    from .bootstrap import _get_admin_user_conn
+
+    conn = db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        teacher = conn.execute(
+            "SELECT * FROM users WHERE id=? AND role=?",
+            (user_id, USER_ROLE_TEACHER),
+        ).fetchone()
+        if not teacher:
+            raise HTTPException(404, "Teacher not found")
+
+        admin_user = _get_admin_user_conn(conn)
+        if not admin_user:
+            raise HTTPException(500, "Admin account is unavailable.")
+
+        transferred = conn.execute(
+            """
+            UPDATE sessions
+            SET owner_user_id=?,
+                teacher_removed_at=NULL,
+                teacher_removed_by_user_id=NULL
+            WHERE owner_user_id=?
+            """,
+            (str(admin_user["id"]), user_id),
+        ).rowcount
+        conn.execute("DELETE FROM users WHERE id=?", (user_id,))
+        conn.commit()
+        return transferred
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def _get_teacher_or_404(user_id: str) -> sqlite3.Row:
     user = get_user_by_id(user_id)
     if not user or user["role"] != USER_ROLE_TEACHER:
