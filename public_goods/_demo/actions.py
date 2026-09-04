@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from ..config import MAX_ACTION_POINTS
 from ..db import db, now_iso
-from .._experiment import selected_phase
+from .._experiment import max_affordable_action_points, selected_phase
 from .utils import _demo_profile_for_student
 
 
@@ -100,6 +100,10 @@ def simulate_demo_actions(session_id: str, round_no: int) -> int:
                 actor_public_id = str(actor["student_id"])
                 actor_profile = _demo_profile_for_student(actor_public_id)
                 actor_contrib = contrib_by_student.get(actor_id, 0)
+                remaining_action_points = max_affordable_action_points(
+                    int(sess["endowment"]),
+                    actor_contrib,
+                )
                 actor_rows: List[Tuple[str, str, str, str, int, str]] = []
                 for target in members:
                     target_id = str(target["id"])
@@ -114,12 +118,15 @@ def simulate_demo_actions(session_id: str, round_no: int) -> int:
                         group_avg,
                         target_contrib == max_contrib,
                     )
-                    points = max(0, min(MAX_ACTION_POINTS, points))
+                    points = max(0, min(MAX_ACTION_POINTS, remaining_action_points, points))
                     if points <= 0:
                         continue
                     actor_rows.append((session_id, round_no, actor_id, target_id, points, now_iso()))
+                    remaining_action_points -= points
+                    if remaining_action_points <= 0:
+                        break
 
-                if not actor_rows:
+                if not actor_rows and remaining_action_points > 0:
                     fallback_target = None
                     if phase == "reward":
                         fallback_target = next(

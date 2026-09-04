@@ -93,6 +93,7 @@
   <div style="margin-top:12px; display:none;" id="action_wrap">
     <h4 style="margin:0 0 8px 0;" id="action_title">Reward or Punishment / 奖励或惩罚</h4>
     <div class="muted" id="action_desc"></div>
+    <div class="muted" id="action_budget_status" style="margin-top:6px;"></div>
     <form id="action_form" style="margin-top:8px;">
       <table id="action_table">
         <tr><th>Anonymous ID / 匿名编号</th><th>Points / 点数</th></tr>
@@ -127,6 +128,7 @@ let contribDraftDirty = false;
 let actionContextKey = null;
 let actionDraftValues = {};
 let actionDraftDirty = new Set();
+let currentActionBudget = 0;
 let statusRefreshPromise = null;
 let submitInFlight = false;
 
@@ -206,6 +208,20 @@ function resetActionDrafts(){
   actionDraftDirty = new Set();
 }
 
+function actionPointTotal(){
+  return Array.from(document.querySelectorAll("#action_table input[data-anon]"))
+    .reduce((total, input) => total + Number(input.value || 0), 0);
+}
+
+function updateActionBudgetStatus(){
+  const used = actionPointTotal();
+  const status = document.getElementById("action_budget_status");
+  const overBudget = used > currentActionBudget;
+  status.innerText = `Action cost: ${used} / ${currentActionBudget} tokens available. / 操作成本：${used} / 可用 ${currentActionBudget} token。`;
+  status.className = overBudget ? "pill warn" : "muted";
+  document.getElementById("action_submit_btn").disabled = submitInFlight || overBudget;
+}
+
 function renderContributionStatus(data){
   const msg = document.getElementById("submit_msg");
   const contribInput = document.getElementById("contrib");
@@ -239,20 +255,23 @@ function renderActionTargets(data){
     wrap.style.display = "none";
     while(table.rows.length > 1) table.deleteRow(1);
     actionContextKey = null;
+    currentActionBudget = 0;
     resetActionDrafts();
     return;
   }
 
   wrap.style.display = "block";
+  currentActionBudget = Number(data.current_round.action_budget || 0);
+  const pocketTokens = Number(data.current_round.pocket_tokens || 0);
   const nextActionContextKey = actionTargetsKey(data);
   const shouldRebuildTargets = actionContextKey !== nextActionContextKey;
 
   if(data.session.phase === "reward"){
     title.innerText = "Reward Stage / 奖励阶段";
-    desc.innerText = "Each reward point costs you 1 and gives the target +2 income. Range: 0-5 for each target. / 每给予某位组员1点奖励，你支付1点成本，对方增加2点收益。每位目标范围为0-5点。";
+    desc.innerText = `Each reward point costs you 1 and gives the target +2 income. You have ${pocketTokens} tokens left after contributing and may spend at most ${currentActionBudget} in total. / 每给予某位组员1点奖励，你支付1点成本，对方增加2点收益。贡献后剩余 ${pocketTokens} token，本阶段总共最多可支付 ${currentActionBudget} token。`;
   }else{
     title.innerText = "Punishment Stage / 惩罚阶段";
-    desc.innerText = "Each punishment point costs you 1 and reduces the target by 3. Range: 0-5 for each target. / 每给予某位组员1点惩罚，你支付1点成本，对方减少3点收益。每位目标范围为0-5点。";
+    desc.innerText = `Each punishment point costs you 1 and reduces the target by 3. You have ${pocketTokens} tokens left after contributing and may spend at most ${currentActionBudget} in total. / 每给予某位组员1点惩罚，你支付1点成本，对方减少3点收益。贡献后剩余 ${pocketTokens} token，本阶段总共最多可支付 ${currentActionBudget} token。`;
   }
 
   if(shouldRebuildTargets){
@@ -276,17 +295,18 @@ function renderActionTargets(data){
     const inp = document.createElement("input");
     inp.type = "number";
     inp.min = "0";
-    inp.max = "5";
+    inp.max = String(Math.min(5, currentActionBudget));
     inp.dataset.anon = target.anonymous_id;
     inp.value = actionDraftDirty.has(target.anonymous_id) ? actionDraftValues[target.anonymous_id] : target.points;
     inp.addEventListener("input", () => {
       actionDraftDirty.add(target.anonymous_id);
       actionDraftValues[target.anonymous_id] = inp.value;
+      updateActionBudgetStatus();
     });
     td.appendChild(inp);
   });
 
-  document.getElementById("action_submit_btn").disabled = submitInFlight;
+  updateActionBudgetStatus();
 }
 
 function renderCompletedPhases(phases){
@@ -443,10 +463,16 @@ document.getElementById("action_form").addEventListener("submit", async (e) => {
 
   const msg = document.getElementById("action_msg");
   const actionBtn = document.getElementById("action_submit_btn");
+  const inputs = Array.from(document.querySelectorAll("#action_table input[data-anon]"));
+  const totalActionCost = actionPointTotal();
+  if(totalActionCost > currentActionBudget){
+    msg.innerText = `Total action cost cannot exceed ${currentActionBudget} tokens. / 操作总成本不能超过 ${currentActionBudget} token。`;
+    updateActionBudgetStatus();
+    return;
+  }
   submitInFlight = true;
   actionBtn.disabled = true;
   try {
-    const inputs = Array.from(document.querySelectorAll("#action_table input[data-anon]"));
     const allocations = {};
     inputs.forEach(inp => {
       allocations[inp.dataset.anon] = Number(inp.value || 0);
@@ -459,8 +485,9 @@ document.getElementById("action_form").addEventListener("submit", async (e) => {
     });
 
     if(res.ok){
+      const data = await res.json();
       resetActionDrafts();
-      msg.innerText = "Action submission saved. / 操作提交已保存。";
+      msg.innerText = `Action submission saved. Cost: ${data.action_cost}/${data.action_budget}. / 操作提交已保存。成本：${data.action_cost}/${data.action_budget}。`;
     } else {
       const t = await res.text();
       msg.innerText = `Submit failed / 提交失败: ${t}`;

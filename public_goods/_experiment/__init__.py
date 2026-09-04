@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .action_budget import action_cost_for_points, available_action_tokens, max_affordable_action_points
 from .grouping import _choose_group_sizes, assign_late_joiner, lock_groups
 from .lifecycle import advance_round, close_round, open_action_stage, open_round
 from .phase_status import build_phase_status, count_computed_rounds, phase_computed_counts_conn
@@ -24,8 +25,10 @@ from .teacher_reports import build_teacher_phase_reports_conn
 
 __all__ = [
     "_choose_group_sizes",
+    "action_cost_for_points",
     "advance_round",
     "assign_late_joiner",
+    "available_action_tokens",
     "build_phase_status",
     "build_student_phase_report_conn",
     "build_teacher_phase_reports_conn",
@@ -36,6 +39,7 @@ __all__ = [
     "current_round_progress_conn",
     "ensure_int",
     "lock_groups",
+    "max_affordable_action_points",
     "next_round_after_compute",
     "open_action_stage",
     "open_round",

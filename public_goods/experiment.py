@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from ._experiment import (
     _choose_group_sizes,
+    action_cost_for_points,
     advance_round,
     assign_late_joiner,
+    available_action_tokens,
     build_phase_status,
     build_student_phase_report_conn,
     build_teacher_phase_reports_conn,
@@ -14,6 +16,7 @@ from ._experiment import (
     current_round_progress_conn,
     ensure_int,
     lock_groups,
+    max_affordable_action_points,
     next_round_after_compute,
     open_action_stage,
     open_round,
@@ -32,8 +35,10 @@ from ._experiment import (
 
 __all__ = [
     "_choose_group_sizes",
+    "action_cost_for_points",
     "advance_round",
     "assign_late_joiner",
+    "available_action_tokens",
     "build_phase_status",
     "build_student_phase_report_conn",
     "build_teacher_phase_reports_conn",
@@ -44,6 +49,7 @@ __all__ = [
     "current_round_progress_conn",
     "ensure_int",
     "lock_groups",
+    "max_affordable_action_points",
     "next_round_after_compute",
     "open_action_stage",
     "open_round",

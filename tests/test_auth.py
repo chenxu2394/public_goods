@@ -2102,7 +2102,24 @@ def test_demo_autoplay_current_phase_advances_reward_phase(monkeypatch, tmp_path
             "SELECT COUNT(*) FROM actions WHERE session_id=? AND round_no BETWEEN 1 AND 30",
             (session_id,),
         ).fetchone()[0]
+        over_budget_demo_actions = conn.execute(
+            """
+            SELECT a.round_no, a.actor_student_id
+            FROM actions a
+            JOIN sessions sess ON sess.id=a.session_id
+            LEFT JOIN contributions c
+              ON c.session_id=a.session_id
+             AND c.round_no=a.round_no
+             AND c.student_id=a.actor_student_id
+            WHERE a.session_id=? AND a.round_no BETWEEN 1 AND 30
+            GROUP BY a.round_no, a.actor_student_id
+            HAVING SUM(a.points) > 5
+                OR SUM(a.points) > sess.endowment - COALESCE(c.contrib, 0)
+        """,
+            (session_id,),
+        ).fetchall()
         conn.close()
 
         assert reward_rounds == 30
         assert reward_actions > 0
+        assert over_budget_demo_actions == []

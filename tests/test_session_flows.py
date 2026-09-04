@@ -421,6 +421,68 @@ def test_api_status_payload_changes_between_contribution_and_action_stage(monkey
         assert all(target["points"] == 0 for target in action_payload["action_targets"])
 
 
+def test_reward_actions_cannot_exceed_five_token_round_budget(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id, _, _ = setup_grouped_session(client, app_module, "Reward Budget Session")
+        open_round(client, session_id, 1, "reward")
+        submit_contributions(client, session_id, {"20260001": 4, "20260002": 0, "20260003": 0})
+        open_action_stage(client, session_id)
+
+        status = client.get(f"/api/{session_id}/status", params={"student_id": "20260001"}).json()
+        targets = [target["anonymous_id"] for target in status["action_targets"]]
+        assert status["current_round"]["pocket_tokens"] == 6
+        assert status["current_round"]["action_budget"] == 5
+
+        over_budget = client.post(
+            f"/api/{session_id}/submit_actions",
+            json={"student_id": "20260001", "allocations": {targets[0]: 3, targets[1]: 3}},
+        )
+        assert over_budget.status_code == 400
+        assert "must not exceed 5 token" in over_budget.text
+
+        at_budget = client.post(
+            f"/api/{session_id}/submit_actions",
+            json={"student_id": "20260001", "allocations": {targets[0]: 3, targets[1]: 2}},
+        )
+        assert at_budget.status_code == 200
+        assert at_budget.json()["action_cost"] == 5
+        assert at_budget.json()["action_budget"] == 5
+
+
+def test_punishment_actions_cannot_spend_contributed_tokens(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id, _, _ = setup_grouped_session(client, app_module, "Punishment Pocket Session")
+        open_round(client, session_id, 1, "punishment")
+        submit_contributions(client, session_id, {"20260001": 8, "20260002": 0, "20260003": 0})
+        open_action_stage(client, session_id)
+
+        status = client.get(f"/api/{session_id}/status", params={"student_id": "20260001"}).json()
+        targets = [target["anonymous_id"] for target in status["action_targets"]]
+        assert status["current_round"]["pocket_tokens"] == 2
+        assert status["current_round"]["action_budget"] == 2
+
+        overdraw = client.post(
+            f"/api/{session_id}/submit_actions",
+            json={"student_id": "20260001", "allocations": {targets[0]: 2, targets[1]: 1}},
+        )
+        assert overdraw.status_code == 400
+        assert "must not exceed 2 token" in overdraw.text
+
+        affordable = client.post(
+            f"/api/{session_id}/submit_actions",
+            json={"student_id": "20260001", "allocations": {targets[0]: 2}},
+        )
+        assert affordable.status_code == 200
+        assert affordable.json()["action_cost"] == 2
+        assert affordable.json()["action_budget"] == 2
+
+
 def test_display_status_reports_latest_group_totals_and_avg_series(monkeypatch, tmp_path):
     app_module, _ = load_app(monkeypatch, tmp_path)
 

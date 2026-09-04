@@ -1,6 +1,7 @@
 import importlib
 
 import pytest
+from fastapi import HTTPException
 
 from tests.support import (
     get_result_rows,
@@ -234,6 +235,56 @@ def test_compute_results_ignores_invalid_actions(monkeypatch, tmp_path):
     assert rows["20260004"]["action_sent"] == 0
     assert rows["20260004"]["action_received"] == 0
     assert float(rows["20260004"]["income"]) == pytest.approx(10.0)
+
+
+def test_compute_results_rejects_action_cost_above_pocket_budget(monkeypatch, tmp_path):
+    app_module, _ = load_initialized_app(monkeypatch, tmp_path)
+    session_id = "overdrawn-action-session"
+
+    insert_session(
+        app_module,
+        session_id,
+        multiplier=1.5,
+        endowment=10,
+        rounds=30,
+        current_round=11,
+        current_phase="reward",
+    )
+    insert_students(
+        app_module,
+        session_id,
+        [
+            ("stu-alpha", "20260001", "Alice", "A2", 1, 1),
+            ("stu-beta", "20260002", "Bob", "B3", 1, 2),
+            ("stu-gamma", "20260003", "Cara", "C4", 1, 3),
+        ],
+    )
+    student_rows = get_student_rows(app_module, session_id)
+    internal_ids = {student_id: str(row["id"]) for student_id, row in student_rows.items()}
+    insert_contributions(
+        app_module,
+        session_id,
+        11,
+        {
+            internal_ids["20260001"]: 8,
+            internal_ids["20260002"]: 0,
+            internal_ids["20260003"]: 0,
+        },
+    )
+    insert_actions(
+        app_module,
+        session_id,
+        11,
+        [
+            (internal_ids["20260001"], internal_ids["20260002"], 2),
+            (internal_ids["20260001"], internal_ids["20260003"], 1),
+        ],
+    )
+
+    with pytest.raises(HTTPException, match="2-token pocket budget"):
+        app_module.compute_results(session_id, 11)
+
+    assert get_result_rows(app_module, session_id, 11) == {}
 
 
 def test_phase_helpers_and_group_size_helpers_are_deterministic(monkeypatch, tmp_path):

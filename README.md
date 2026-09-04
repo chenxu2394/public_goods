@@ -308,5 +308,6 @@ Important notes:
    - Students submit contribution (`0-10`)
    - Baseline round: close and compute directly
    - Reward/Punishment round: open action stage, let students submit/update actions, then compute when ready
+   - Each action point costs 1 token. A student's total action cost is capped at 5 tokens and cannot exceed the tokens left from the round endowment after contributing; public returns and received action effects are not spendable during that round
 9. Use `/display/<session_id>` for classroom projection
 10. Export CSV from the session admin panel (long format: one row per student per round)

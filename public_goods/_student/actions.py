@@ -6,7 +6,7 @@ from fastapi import HTTPException
 
 from ..config import MAX_ACTION_POINTS
 from ..db import _run_write_with_retry, now_iso
-from .._experiment import ensure_int, selected_phase
+from .._experiment import action_cost_for_points, available_action_tokens, ensure_int, selected_phase
 from .._sessions import get_session
 
 
@@ -30,7 +30,7 @@ def submit_student_actions(session_id: str, payload: object) -> dict[str, object
     if not isinstance(allocations, dict):
         raise HTTPException(400, "allocations must be an object")
 
-    def _write_actions(conn: sqlite3.Connection) -> int:
+    def _write_actions(conn: sqlite3.Connection) -> tuple[int, float, int]:
         stu = conn.execute(
             "SELECT id, group_no FROM students WHERE session_id=? AND student_id=?",
             (session_id, student_id),
@@ -54,11 +54,33 @@ def submit_student_actions(session_id: str, payload: object) -> dict[str, object
         target_by_anon = {target["anonymous_id"]: target["id"] for target in targets}
 
         rows_to_insert = []
+        total_points = 0
         for anon_id, target_id in target_by_anon.items():
             raw_points = allocations.get(anon_id, 0)
             points = ensure_int(str(raw_points), 0, MAX_ACTION_POINTS, f"points[{anon_id}]")
             if points > 0:
                 rows_to_insert.append((session_id, round_no, actor_student_id, target_id, points, now_iso()))
+                total_points += points
+
+        contribution_row = conn.execute(
+            """
+            SELECT contrib
+            FROM contributions
+            WHERE session_id=? AND round_no=? AND student_id=?
+        """,
+            (session_id, round_no, actor_student_id),
+        ).fetchone()
+        if contribution_row is None:
+            raise HTTPException(400, "Submit a contribution before submitting actions")
+
+        contribution = int(contribution_row["contrib"])
+        action_budget = available_action_tokens(int(sess["endowment"]), contribution)
+        action_cost = action_cost_for_points(total_points)
+        if action_cost > action_budget:
+            raise HTTPException(
+                400,
+                f"Total action cost must not exceed {action_budget} token(s) available from your pocket",
+            )
 
         conn.execute(
             "DELETE FROM actions WHERE session_id=? AND round_no=? AND actor_student_id=?",
@@ -74,13 +96,15 @@ def submit_student_actions(session_id: str, payload: object) -> dict[str, object
                 rows_to_insert,
             )
 
-        return len(rows_to_insert)
+        return len(rows_to_insert), action_cost, action_budget
 
-    targets_submitted = _run_write_with_retry(_write_actions)
+    targets_submitted, action_cost, action_budget = _run_write_with_retry(_write_actions)
 
     return {
         "ok": True,
         "round": round_no,
         "phase": phase,
         "targets_submitted": targets_submitted,
+        "action_cost": action_cost,
+        "action_budget": action_budget,
     }

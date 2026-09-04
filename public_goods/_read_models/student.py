@@ -6,6 +6,7 @@ from ..db import db
 from .._experiment import (
     build_phase_status,
     build_student_phase_report_conn,
+    available_action_tokens,
     phase_context_conn,
     phase_computed_counts_conn,
     phase_label,
@@ -50,6 +51,13 @@ def build_student_status_payload(session_id: str, student_id: str) -> StudentSta
     """,
         (session_id, cur_r, stu["id"]),
     ).fetchone()
+    submitted_contrib = int(cur_c["contrib"]) if cur_c else None
+    pocket_tokens = max(0, int(sess["endowment"]) - submitted_contrib) if submitted_contrib is not None else 0
+    action_budget = (
+        available_action_tokens(int(sess["endowment"]), submitted_contrib)
+        if submitted_contrib is not None
+        else 0
+    )
 
     submitted_actions_rows = conn.execute(
         """
@@ -172,7 +180,9 @@ def build_student_status_payload(session_id: str, student_id: str) -> StudentSta
         "current_phase": current_phase_summary,
         "current_round": {
             "round": cur_r,
-            "submitted_contrib": int(cur_c["contrib"]) if cur_c else None,
+            "submitted_contrib": submitted_contrib,
+            "pocket_tokens": pocket_tokens,
+            "action_budget": action_budget,
             "group_view_visible": group_view_visible,
         },
         "group_view": [

@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from ..config import ACTION_COST, PUNISH_EFFECT, REWARD_EFFECT
 from ..db import db, now_iso
+from .action_budget import action_cost_for_points, available_action_tokens
 from .grouping import assign_late_joiner
 from .phases import phase_context_conn
 
@@ -115,6 +116,15 @@ def compute_results(session_id: str, round_no: int):
                 continue
             action_sent[actor] = action_sent.get(actor, 0) + points
             action_received[target] = action_received.get(target, 0) + points
+
+        for actor, sent in action_sent.items():
+            action_budget = available_action_tokens(endowment, contrib.get(actor, 0))
+            if action_cost_for_points(sent) > action_budget:
+                conn.close()
+                raise HTTPException(
+                    400,
+                    f"Student action cost exceeds the {action_budget}-token pocket budget.",
+                )
 
     computed_at = now_iso()
     out_rows = []
