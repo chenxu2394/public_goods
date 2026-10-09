@@ -9,6 +9,11 @@
 {% endblock %}
 {% block content %}
 
+<style>
+  .session-actions { display:flex; align-items:center; justify-content:center; gap:8px; white-space:nowrap; }
+  .session-actions a { display:inline-flex; align-items:center; justify-content:center; padding:10px 12px; border:1px solid #ccc; border-radius:10px; font-size:16px; line-height:normal; background:#fff; white-space:nowrap; word-break:normal; }
+</style>
+
 <div id="delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000; align-items:center; justify-content:center;">
   <div style="background:#fff; border-radius:12px; padding:28px 32px; max-width:480px; width:90%; box-shadow:0 4px 24px rgba(0,0,0,0.18);">
     <h3 id="delete-modal-title" style="margin:0 0 12px 0;"></h3>
@@ -254,8 +259,7 @@
           <th>Title</th>
           <th>Parameters</th>
           <th>Status</th>
-          <th>Open</th>
-          <th>Delete</th>
+          <th>Actions</th>
         </tr>
         {% for s in sessions %}
           <tr>
@@ -275,18 +279,14 @@
               {% if must_change_password %}
                 <span class="muted">Change password first</span>
               {% else %}
-                <a href="/admin/{{ s.id }}">Manage</a>
-              {% endif %}
-            </td>
-            <td>
-              {% if must_change_password %}
-                <span class="muted">Unavailable</span>
-              {% else %}
-                <form method="post" action="/admin/{{ s.id }}/delete" data-delete-mode="{% if is_admin %}delete{% else %}archive{% endif %}">
-                  <button type="button" onclick='openDeleteModal(this.form, {{ s.title|tojson }})'>
-                    {% if is_admin %}Delete{% else %}Remove{% endif %}
-                  </button>
-                </form>
+                <div class="session-actions">
+                  <a href="/admin/{{ s.id }}">Manage</a>
+                  <form method="post" action="/admin/{{ s.id }}/delete" data-delete-mode="{% if is_admin %}delete{% else %}archive{% endif %}">
+                    <button type="button" onclick='openDeleteModal(this.form, {{ s.title|tojson }})'>
+                      {% if is_admin %}Delete{% else %}Remove{% endif %}
+                    </button>
+                  </form>
+                </div>
               {% endif %}
             </td>
           </tr>
