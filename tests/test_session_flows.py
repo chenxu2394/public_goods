@@ -203,6 +203,8 @@ def test_join_rejects_missing_whitelist_and_name_mismatch(monkeypatch, tmp_path)
             follow_redirects=False,
         )
         assert missing_whitelist.status_code == 403
+        assert missing_whitelist.headers["content-type"].startswith("text/html")
+        assert 'role="alert"' in missing_whitelist.text
         assert "Whitelist not imported" in missing_whitelist.text
 
         app_module.upsert_whitelist(session_id, [("20260001", "Alice")])
@@ -213,7 +215,11 @@ def test_join_rejects_missing_whitelist_and_name_mismatch(monkeypatch, tmp_path)
             follow_redirects=False,
         )
         assert unknown_student.status_code == 403
+        assert unknown_student.headers["content-type"].startswith("text/html")
+        assert f'action="/join/{join_token}"' in unknown_student.text
         assert "Student ID is not in the whitelist" in unknown_student.text
+        assert 'name="student_id" value="20269999"' in unknown_student.text
+        assert 'name="name" value="Alice"' in unknown_student.text
 
         name_mismatch = client.post(
             f"/join/{join_token}",
@@ -221,7 +227,10 @@ def test_join_rejects_missing_whitelist_and_name_mismatch(monkeypatch, tmp_path)
             follow_redirects=False,
         )
         assert name_mismatch.status_code == 403
+        assert name_mismatch.headers["content-type"].startswith("text/html")
         assert "Name does not match the whitelist exactly." in name_mismatch.text
+        assert 'name="student_id" value="20260001"' in name_mismatch.text
+        assert 'name="name" value="alice"' in name_mismatch.text
 
         joined = client.post(
             f"/join/{join_token}",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -35,8 +35,27 @@ def join_page(request: Request, join_token: str):
 
 
 @router.post("/join/{join_token}")
-def join_submit(join_token: str, student_id: str = Form(...), name: str = Form(...)):
-    session_id, student_id = submit_student_join(join_token, student_id, name)
+def join_submit(request: Request, join_token: str, student_id: str = Form(...), name: str = Form(...)):
+    try:
+        session_id, student_id = submit_student_join(join_token, student_id, name)
+    except HTTPException as exc:
+        if exc.status_code not in (400, 403):
+            raise
+        sess = get_session_by_join_token(join_token)
+        return templates.TemplateResponse(
+            request,
+            "join.html",
+            {
+                "request": request,
+                "sess": sess,
+                "counts": session_counts(str(sess["id"])),
+                "join_token": join_token,
+                "error": exc.detail,
+                "student_id": student_id,
+                "name": name,
+            },
+            status_code=exc.status_code,
+        )
     return RedirectResponse(url=f"/s/{session_id}/{student_id}", status_code=303)
 
 
