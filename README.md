@@ -1,10 +1,10 @@
 # Public Goods Classroom Experiment
 
-A web application for running public-goods experiments in university classrooms.
+A web application for running [public-goods experiments](https://en.wikipedia.org/wiki/Public_goods_game) in a classroom setting.
 
-In a public-goods experiment, participants decide how many of their tokens to contribute to a shared pool. The group's choices affect each participant's outcome, making it possible to discuss cooperation and incentives. This application supports multiple rounds, including rounds in which students can reward or punish other group members.
+In a public-goods experiment, participants decide how many tokens to contribute to a shared pool. The group's contributions affect each participant's outcome, providing a basis for discussing cooperation and incentives. The application supports multiple rounds, some of which allow students to reward or punish other group members.
 
-Students participate from their phones or laptops. Instructors manage sessions, show results to the class, and export the data for analysis. The application was developed for university teaching and is [deployed on Azure App Service](https://public-goods.azurewebsites.net/). Instructor pages require an approved Microsoft account, and students need a session join link.
+Students participate from their phones or laptops. Instructors manage sessions, show results to the class, and export the data for analysis. The application was developed for university teaching and is deployed at [public-goods.azurewebsites.net](https://public-goods.azurewebsites.net/). Instructor pages require an approved Microsoft account, and students need a session join link.
 
 ## Screenshots
 
