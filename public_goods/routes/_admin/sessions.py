@@ -4,6 +4,8 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from ...config import DEFAULT_GROUP_SIZE, MAX_GROUP_SIZE, MIN_GROUP_SIZE, TOTAL_EXPERIMENT_ROUNDS, USER_ROLE_ADMIN, USER_ROLE_TEACHER
+from ...db import db
+from ..._experiment import current_round_progress_conn
 from ..._sessions import (
     _validate_session_title,
     archive_session_to_admin,
@@ -66,12 +68,22 @@ def admin_panel(request: Request, session_id: str):
     return session_panel_response(request, user, sess)
 
 
-@router.get("/api/admin/{session_id}/roster_progress")
-def admin_roster_progress(request: Request, session_id: str):
+@router.get("/api/admin/{session_id}/panel_progress")
+def admin_panel_progress(request: Request, session_id: str):
     user, sess, gate = require_management_session(request, session_id)
     if gate:
         return gate
-    return JSONResponse(session_counts(session_id))
+
+    conn = db()
+    try:
+        round_progress = current_round_progress_conn(conn, session_id, int(sess["current_round"]))
+    finally:
+        conn.close()
+    return JSONResponse({
+        **session_counts(session_id),
+        "round_no": int(sess["current_round"]),
+        "round_progress": round_progress,
+    })
 
 
 @router.post("/admin/{session_id}/title")

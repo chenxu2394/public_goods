@@ -89,6 +89,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
         student_id TEXT NOT NULL,
         contrib INTEGER NOT NULL,
         created_at TEXT NOT NULL,
+        action_submitted_at TEXT,
         UNIQUE(session_id, round_no, student_id)
     )
     """

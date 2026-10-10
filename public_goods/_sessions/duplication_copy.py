@@ -160,7 +160,7 @@ def _duplicate_session_conn(conn: sqlite3.Connection, session_id: str) -> str:
 
     contribution_rows = conn.execute(
         """
-        SELECT round_no, student_id, contrib, created_at
+        SELECT round_no, student_id, contrib, created_at, action_submitted_at
         FROM contributions
         WHERE session_id=?
         ORDER BY id ASC
@@ -170,8 +170,8 @@ def _duplicate_session_conn(conn: sqlite3.Connection, session_id: str) -> str:
     if contribution_rows:
         conn.executemany(
             """
-            INSERT INTO contributions(session_id, round_no, student_id, contrib, created_at)
-            VALUES(?,?,?,?,?)
+            INSERT INTO contributions(session_id, round_no, student_id, contrib, created_at, action_submitted_at)
+            VALUES(?,?,?,?,?,?)
         """,
             [
                 (
@@ -180,6 +180,7 @@ def _duplicate_session_conn(conn: sqlite3.Connection, session_id: str) -> str:
                     remap_student_id(str(row["student_id"])),
                     int(row["contrib"]),
                     row["created_at"],
+                    row["action_submitted_at"],
                 )
                 for row in contribution_rows
             ],

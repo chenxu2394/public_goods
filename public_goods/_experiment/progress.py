@@ -14,7 +14,10 @@ def current_round_progress_conn(
         SELECT s.group_no,
                COUNT(DISTINCT s.id) AS student_total,
                COUNT(DISTINCT c.student_id) AS contrib_submitted,
-               COUNT(DISTINCT a.actor_student_id) AS action_submitted
+               COUNT(DISTINCT CASE
+                   WHEN c.action_submitted_at IS NOT NULL OR a.actor_student_id IS NOT NULL
+                   THEN s.id
+               END) AS action_submitted
         FROM students s
         LEFT JOIN contributions c
           ON c.session_id=s.session_id

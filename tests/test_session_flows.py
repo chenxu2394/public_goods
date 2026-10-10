@@ -60,16 +60,20 @@ def test_grouping_shows_joined_count_for_current_roster(monkeypatch, tmp_path):
 
         panel = client.get(f"/admin/{session_id}")
         assert 'Roster joined: <b id="roster-joined-count">0</b> of <b id="roster-total-count">3</b>' in panel.text
-        assert f"/api/admin/{session_id}/roster_progress" in panel.text
-        progress = client.get(f"/api/admin/{session_id}/roster_progress")
-        assert progress.json() == {"students": 0, "whitelist": 3, "roster_joined": 0}
+        assert f"/api/admin/{session_id}/panel_progress" in panel.text
+        progress = client.get(f"/api/admin/{session_id}/panel_progress")
+        assert {key: progress.json()[key] for key in ("students", "whitelist", "roster_joined")} == {
+            "students": 0, "whitelist": 3, "roster_joined": 0,
+        }
 
         join_token = app_module.get_session(session_id)["join_token"]
         join_students(client, join_token, roster[:1])
         panel = client.get(f"/admin/{session_id}")
         assert 'Roster joined: <b id="roster-joined-count">1</b> of <b id="roster-total-count">3</b>' in panel.text
-        progress = client.get(f"/api/admin/{session_id}/roster_progress")
-        assert progress.json() == {"students": 1, "whitelist": 3, "roster_joined": 1}
+        progress = client.get(f"/api/admin/{session_id}/panel_progress")
+        assert {key: progress.json()[key] for key in ("students", "whitelist", "roster_joined")} == {
+            "students": 1, "whitelist": 3, "roster_joined": 1,
+        }
 
         upload = client.post(
             f"/admin/{session_id}/whitelist/upload",
@@ -84,13 +88,57 @@ def test_grouping_shows_joined_count_for_current_roster(monkeypatch, tmp_path):
         panel = client.get(f"/admin/{session_id}")
         assert 'Roster joined: <b id="roster-joined-count">0</b> of <b id="roster-total-count">0</b>' in panel.text
         assert 'Students joined overall: <span id="students-joined-count">1</span>' in panel.text
-        progress = client.get(f"/api/admin/{session_id}/roster_progress")
-        assert progress.json() == {"students": 1, "whitelist": 0, "roster_joined": 0}
+        progress = client.get(f"/api/admin/{session_id}/panel_progress")
+        assert {key: progress.json()[key] for key in ("students", "whitelist", "roster_joined")} == {
+            "students": 1, "whitelist": 0, "roster_joined": 0,
+        }
 
         client.cookies.clear()
-        unauthorized = client.get(f"/api/admin/{session_id}/roster_progress", follow_redirects=False)
+        unauthorized = client.get(f"/api/admin/{session_id}/panel_progress", follow_redirects=False)
         assert unauthorized.status_code == 303
         assert unauthorized.headers["location"] == "/admin/login"
+
+
+def test_panel_progress_counts_first_submission_in_each_stage(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id, _, _ = setup_grouped_session(client, app_module, "Submission Progress")
+        open_round(client, session_id, 1, "reward")
+
+        progress_url = f"/api/admin/{session_id}/panel_progress"
+        progress = client.get(progress_url).json()
+        assert progress["round_progress"]["student_total"] == 3
+        assert progress["round_progress"]["contrib_submitted"] == 0
+        assert progress["round_progress"]["action_submitted"] == 0
+
+        submit_contributions(client, session_id, {"20260001": 2})
+        submit_contributions(client, session_id, {"20260001": 3})
+        progress = client.get(progress_url).json()
+        assert progress["round_progress"]["contrib_submitted"] == 1
+
+        open_action_stage(client, session_id)
+        action = client.post(
+            f"/api/{session_id}/submit_actions",
+            json={"student_id": "20260001", "allocations": {}},
+        )
+        assert action.status_code == 200
+        progress = client.get(progress_url).json()
+        assert progress["round_progress"]["action_submitted"] == 1
+        assert progress["round_progress"]["groups"][0]["action_submitted"] == 1
+
+        assert client.post(
+            f"/api/{session_id}/submit_actions",
+            json={"student_id": "20260001", "allocations": {}},
+        ).status_code == 200
+        assert client.get(progress_url).json()["round_progress"]["action_submitted"] == 1
+
+        duplicate = client.post(f"/admin/{session_id}/duplicate", follow_redirects=False)
+        assert duplicate.status_code == 303
+        duplicate_session_id = duplicate.headers["location"].rsplit("/", 1)[-1]
+        copied_progress = client.get(f"/api/admin/{duplicate_session_id}/panel_progress").json()
+        assert copied_progress["round_progress"]["action_submitted"] == 1
 
 
 def test_whitelist_upload_accepts_bom_and_skips_blank_rows(monkeypatch, tmp_path):

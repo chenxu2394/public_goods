@@ -96,6 +96,14 @@ def submit_student_actions(session_id: str, payload: object) -> dict[str, object
                 rows_to_insert,
             )
 
+        conn.execute(
+            """
+            UPDATE contributions SET action_submitted_at=?
+            WHERE session_id=? AND round_no=? AND student_id=?
+            """,
+            (now_iso(), session_id, round_no, actor_student_id),
+        )
+
         return len(rows_to_insert), action_cost, action_budget
 
     targets_submitted, action_cost, action_budget = _run_write_with_retry(_write_actions)

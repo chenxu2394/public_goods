@@ -299,20 +299,21 @@
 
 <div class="card">
   <h3>Current Round Progress</h3>
+  <div class="muted">Submission counts update automatically every few seconds.</div>
   <div class="row">
     <div class="col">
       <div class="muted">Contribution submissions</div>
-      <div><b>{{ round_progress.contrib_submitted }}</b> / {{ round_progress.student_total }}</div>
+      <div aria-live="polite"><b id="contrib-submitted-count">{{ round_progress.contrib_submitted }}</b> / <span id="contrib-total-count">{{ round_progress.student_total }}</span></div>
     </div>
     <div class="col">
       <div class="muted">{% if round_ctx.phase == "baseline" %}Action submissions{% else %}{{ round_ctx.phase_label }} submissions{% endif %}</div>
-      <div><b>{{ round_progress.action_submitted }}</b> / {{ round_progress.student_total }}</div>
+      <div aria-live="polite"><b id="action-submitted-count">{{ round_progress.action_submitted }}</b> / <span id="action-total-count">{{ round_progress.student_total }}</span></div>
     </div>
   </div>
-  {% if round_progress.groups|length > 0 %}
-    <div style="overflow:auto; margin-top:10px;">
+    <div id="group-progress-wrap" style="overflow:auto; margin-top:10px;" {% if round_progress.groups|length == 0 %}hidden{% endif %}>
       <table>
-        <tr><th>Group</th><th>Contribution Progress</th><th>Action Progress</th></tr>
+        <thead><tr><th>Group</th><th>Contribution Progress</th><th>Action Progress</th></tr></thead>
+        <tbody id="group-progress-rows">
         {% for row in round_progress.groups %}
           <tr>
             <td>{{ row.group_no }}</td>
@@ -320,9 +321,9 @@
             <td>{{ row.action_submitted }} / {{ row.student_total }}</td>
           </tr>
         {% endfor %}
+        </tbody>
       </table>
     </div>
-  {% endif %}
 
   {% if current_round_contrib_rows|length > 0 %}
     <div style="margin-top:12px;">
@@ -435,14 +436,43 @@
   const rosterTotal = document.getElementById("roster-total-count");
   const studentsJoined = document.getElementById("students-joined-count");
   const whitelistCount = document.getElementById("whitelist-count");
-  const progressUrl = {{ ("/api/admin/" ~ sess.id ~ "/roster_progress")|tojson }};
+  const contribSubmitted = document.getElementById("contrib-submitted-count");
+  const contribTotal = document.getElementById("contrib-total-count");
+  const actionSubmitted = document.getElementById("action-submitted-count");
+  const actionTotal = document.getElementById("action-total-count");
+  const groupProgressWrap = document.getElementById("group-progress-wrap");
+  const groupProgressRows = document.getElementById("group-progress-rows");
+  const displayedRound = {{ round_ctx.round|tojson }};
+  const progressUrl = {{ ("/api/admin/" ~ sess.id ~ "/panel_progress")|tojson }};
+  function groupSignature(groups) {
+    return groups.map(group => [group.group_no, group.student_total, group.contrib_submitted, group.action_submitted].join(":")).join("|");
+  }
+  let displayedGroups = groupSignature({{ round_progress.groups|tojson }});
 
   function setCount(element, value) {
     const next = String(value);
     if (element.textContent !== next) element.textContent = next;
   }
 
-  async function refreshRosterProgress() {
+  function updateGroupProgress(groups) {
+    const nextGroups = groupSignature(groups);
+    if (nextGroups === displayedGroups) return;
+    const rows = document.createDocumentFragment();
+    for (const group of groups) {
+      const row = document.createElement("tr");
+      for (const value of [group.group_no, `${group.contrib_submitted} / ${group.student_total}`, `${group.action_submitted} / ${group.student_total}`]) {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.appendChild(cell);
+      }
+      rows.appendChild(row);
+    }
+    groupProgressRows.replaceChildren(rows);
+    groupProgressWrap.hidden = groups.length === 0;
+    displayedGroups = nextGroups;
+  }
+
+  async function refreshPanelProgress() {
     if (document.hidden) return;
     try {
       const response = await fetch(progressUrl, { cache: "no-store", credentials: "same-origin" });
@@ -453,13 +483,20 @@
       setCount(rosterTotal, counts.whitelist);
       setCount(studentsJoined, counts.students);
       setCount(whitelistCount, counts.whitelist);
+      if (counts.round_no !== displayedRound || !counts.round_progress) return;
+      const progress = counts.round_progress;
+      setCount(contribSubmitted, progress.contrib_submitted);
+      setCount(contribTotal, progress.student_total);
+      setCount(actionSubmitted, progress.action_submitted);
+      setCount(actionTotal, progress.student_total);
+      if (Array.isArray(progress.groups)) updateGroupProgress(progress.groups);
     } catch (_) {
       // Keep the last visible counts until the next check.
     }
   }
 
-  setInterval(refreshRosterProgress, 3000);
-  document.addEventListener("visibilitychange", refreshRosterProgress);
+  setInterval(refreshPanelProgress, 3000);
+  document.addEventListener("visibilitychange", refreshPanelProgress);
 })();
 </script>
 
