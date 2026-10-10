@@ -108,7 +108,7 @@
 
 <div class="card">
   <h3>Whitelist (student ID + name must match exactly)</h3>
-  <div class="muted">Current whitelist count: <b>{{ counts.whitelist }}</b>. If no whitelist is uploaded, students cannot join.</div>
+  <div class="muted">Current whitelist count: <b id="whitelist-count">{{ counts.whitelist }}</b>. If no whitelist is uploaded, students cannot join.</div>
 
   <div class="row" style="margin-top:10px;">
     <div class="col">
@@ -139,7 +139,9 @@
   <h3>Grouping</h3>
   <div class="row">
     <div class="col">
-      <div>Students joined: <b>{{ counts.students }}</b></div>
+      <div aria-live="polite">Roster joined: <b id="roster-joined-count">{{ counts.roster_joined }}</b> of <b id="roster-total-count">{{ counts.whitelist }}</b></div>
+      <div class="muted">Students joined overall: <span id="students-joined-count">{{ counts.students }}</span></div>
+      <div class="muted">Updates automatically every few seconds as students join.</div>
       <div>Target group size: <b>{{ sess.group_size }}</b> (system keeps groups between 3 and 7)</div>
       <div>Lock status:
         {% if sess.locked == 1 %}
@@ -426,5 +428,39 @@
   </div>
   {% endif %}
 </div>
+
+<script>
+(() => {
+  const rosterJoined = document.getElementById("roster-joined-count");
+  const rosterTotal = document.getElementById("roster-total-count");
+  const studentsJoined = document.getElementById("students-joined-count");
+  const whitelistCount = document.getElementById("whitelist-count");
+  const progressUrl = {{ ("/api/admin/" ~ sess.id ~ "/roster_progress")|tojson }};
+
+  function setCount(element, value) {
+    const next = String(value);
+    if (element.textContent !== next) element.textContent = next;
+  }
+
+  async function refreshRosterProgress() {
+    if (document.hidden) return;
+    try {
+      const response = await fetch(progressUrl, { cache: "no-store", credentials: "same-origin" });
+      if (!response.ok || response.redirected) return;
+      const counts = await response.json();
+      if (!Number.isInteger(counts.roster_joined) || !Number.isInteger(counts.whitelist) || !Number.isInteger(counts.students)) return;
+      setCount(rosterJoined, counts.roster_joined);
+      setCount(rosterTotal, counts.whitelist);
+      setCount(studentsJoined, counts.students);
+      setCount(whitelistCount, counts.whitelist);
+    } catch (_) {
+      // Keep the last visible counts until the next check.
+    }
+  }
+
+  setInterval(refreshRosterProgress, 3000);
+  document.addEventListener("visibilitychange", refreshRosterProgress);
+})();
+</script>
 
 {% endblock %}

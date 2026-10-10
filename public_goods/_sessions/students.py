@@ -42,8 +42,21 @@ def session_counts(session_id: str) -> Dict[str, int]:
         "SELECT COUNT(*) AS c FROM whitelist WHERE session_id=?",
         (session_id,),
     ).fetchone()["c"]
+    roster_joined = conn.execute(
+        """
+        SELECT COUNT(*) AS c
+        FROM whitelist w
+        JOIN students s ON s.session_id=w.session_id AND s.student_id=w.student_id
+        WHERE w.session_id=?
+        """,
+        (session_id,),
+    ).fetchone()["c"]
     conn.close()
-    return {"students": int(student_total), "whitelist": int(whitelist_total)}
+    return {
+        "students": int(student_total),
+        "whitelist": int(whitelist_total),
+        "roster_joined": int(roster_joined),
+    }
 
 
 def upsert_joined_student(session_id: str, student_id: str, name: str) -> str:

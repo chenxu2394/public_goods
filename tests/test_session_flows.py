@@ -49,6 +49,50 @@ def test_unlocked_round_shows_guidance_instead_of_json(monkeypatch, tmp_path):
         assert f'action="/admin/{session_id}/open_round"' in grouped_panel.text
 
 
+def test_grouping_shows_joined_count_for_current_roster(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id = create_session(client, "Roster Progress")
+        roster = [("20260001", "Alice"), ("20260002", "Bob"), ("20260003", "Cara")]
+        app_module.upsert_whitelist(session_id, roster)
+
+        panel = client.get(f"/admin/{session_id}")
+        assert 'Roster joined: <b id="roster-joined-count">0</b> of <b id="roster-total-count">3</b>' in panel.text
+        assert f"/api/admin/{session_id}/roster_progress" in panel.text
+        progress = client.get(f"/api/admin/{session_id}/roster_progress")
+        assert progress.json() == {"students": 0, "whitelist": 3, "roster_joined": 0}
+
+        join_token = app_module.get_session(session_id)["join_token"]
+        join_students(client, join_token, roster[:1])
+        panel = client.get(f"/admin/{session_id}")
+        assert 'Roster joined: <b id="roster-joined-count">1</b> of <b id="roster-total-count">3</b>' in panel.text
+        progress = client.get(f"/api/admin/{session_id}/roster_progress")
+        assert progress.json() == {"students": 1, "whitelist": 3, "roster_joined": 1}
+
+        upload = client.post(
+            f"/admin/{session_id}/whitelist/upload",
+            files={"file": ("roster.csv", b"student_id,name\n20260004,Dana\n", "text/csv")},
+            follow_redirects=False,
+        )
+        assert upload.status_code == 303
+        panel = client.get(f"/admin/{session_id}")
+        assert 'Roster joined: <b id="roster-joined-count">1</b> of <b id="roster-total-count">4</b>' in panel.text
+
+        assert client.post(f"/admin/{session_id}/whitelist/clear", follow_redirects=False).status_code == 303
+        panel = client.get(f"/admin/{session_id}")
+        assert 'Roster joined: <b id="roster-joined-count">0</b> of <b id="roster-total-count">0</b>' in panel.text
+        assert 'Students joined overall: <span id="students-joined-count">1</span>' in panel.text
+        progress = client.get(f"/api/admin/{session_id}/roster_progress")
+        assert progress.json() == {"students": 1, "whitelist": 0, "roster_joined": 0}
+
+        client.cookies.clear()
+        unauthorized = client.get(f"/api/admin/{session_id}/roster_progress", follow_redirects=False)
+        assert unauthorized.status_code == 303
+        assert unauthorized.headers["location"] == "/admin/login"
+
+
 def test_whitelist_upload_accepts_bom_and_skips_blank_rows(monkeypatch, tmp_path):
     app_module, _ = load_app(monkeypatch, tmp_path)
 

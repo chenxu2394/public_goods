@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from ...config import DEFAULT_GROUP_SIZE, MAX_GROUP_SIZE, MIN_GROUP_SIZE, TOTAL_EXPERIMENT_ROUNDS, USER_ROLE_ADMIN, USER_ROLE_TEACHER
 from ..._sessions import (
@@ -13,6 +13,7 @@ from ..._sessions import (
     duplicate_session_setup_as_admin,
     get_session,
     get_user_by_id,
+    session_counts,
     set_session_title,
     transfer_session_owner,
 )
@@ -63,6 +64,14 @@ def admin_panel(request: Request, session_id: str):
     if gate:
         return gate
     return session_panel_response(request, user, sess)
+
+
+@router.get("/api/admin/{session_id}/roster_progress")
+def admin_roster_progress(request: Request, session_id: str):
+    user, sess, gate = require_management_session(request, session_id)
+    if gate:
+        return gate
+    return JSONResponse(session_counts(session_id))
 
 
 @router.post("/admin/{session_id}/title")
