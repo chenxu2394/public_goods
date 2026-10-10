@@ -17,6 +17,7 @@ from ...experiment import (
     stage_of_session,
 )
 from ..helpers import require_management_session
+from .common import session_panel_response
 
 
 router = APIRouter()
@@ -45,7 +46,13 @@ def admin_open_round(
         return gate
 
     if int(sess["locked"]) != 1:
-        raise HTTPException(400, "Please lock groups before opening rounds.")
+        return session_panel_response(
+            request,
+            user,
+            sess,
+            status_code=400,
+            round_error="Randomize groups and lock them before opening a round.",
+        )
     if stage_of_session(sess) != "closed":
         raise HTTPException(400, "Current round is already open.")
 

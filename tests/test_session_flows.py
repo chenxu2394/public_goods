@@ -8,6 +8,7 @@ from tests.support import (
     close_and_compute,
     create_session,
     get_student_rows,
+    join_students,
     load_app,
     login,
     open_action_stage,
@@ -15,6 +16,37 @@ from tests.support import (
     setup_grouped_session,
     submit_contributions,
 )
+
+
+def test_unlocked_round_shows_guidance_instead_of_json(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id = create_session(client, "Ungrouped Session")
+        students = [("20260001", "Alice"), ("20260002", "Bob"), ("20260003", "Cara")]
+        app_module.upsert_whitelist(session_id, students)
+        join_token = app_module.get_session(session_id)["join_token"]
+        join_students(client, join_token, students)
+
+        panel = client.get(f"/admin/{session_id}")
+        assert panel.status_code == 200
+        assert "Randomize groups and lock them above before opening a round." in panel.text
+        assert f'action="/admin/{session_id}/open_round"' not in panel.text
+
+        response = client.post(
+            f"/admin/{session_id}/open_round",
+            data={"round_no": "1", "phase": "baseline"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 400
+        assert response.headers["content-type"].startswith("text/html")
+        assert "Randomize groups and lock them before opening a round." in response.text
+        assert app_module.get_session(session_id)["round_open"] == 0
+
+        assert client.post(f"/admin/{session_id}/lock", follow_redirects=False).status_code == 303
+        grouped_panel = client.get(f"/admin/{session_id}")
+        assert f'action="/admin/{session_id}/open_round"' in grouped_panel.text
 
 
 def test_whitelist_upload_accepts_bom_and_skips_blank_rows(monkeypatch, tmp_path):

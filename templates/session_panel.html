@@ -214,6 +214,7 @@
 
 <div class="card">
   <h3>Round Control</h3>
+  {% if round_error %}<div class="pill warn" role="alert" style="margin-bottom:8px;">{{ round_error }}</div>{% endif %}
   <div>
     Current total round: <b>{{ round_ctx.round }}</b> / {{ sess.rounds }}
     {% if round_ctx.phase %}
@@ -236,6 +237,9 @@
       {% if round_ctx.completed %}
         <button type="button" disabled>Session completed</button>
         <div class="muted" style="margin-top:6px;">All configured rounds have been computed.</div>
+      {% elif sess.locked == 0 %}
+        <button type="button" disabled>Choose type and open contribution stage</button>
+        <div class="muted" style="margin-top:6px;">Randomize groups and lock them above before opening a round.</div>
       {% elif round_ctx.stage == "closed" %}
         <form method="post" action="/admin/{{ sess.id }}/open_round">
           <input type="hidden" name="round_no" value="{{ round_ctx.round }}" />

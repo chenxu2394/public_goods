@@ -63,6 +63,7 @@ class SessionPanelContext(TypedDict, total=False):
     transfer_success: str
     demo_error: str
     demo_success: str
+    round_error: str
 
 
 class StudentStatusPayload(TypedDict):
