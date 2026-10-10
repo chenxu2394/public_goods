@@ -1522,6 +1522,131 @@ def test_teacher_can_rotate_join_link_and_old_link_expires(monkeypatch, tmp_path
         assert student_page.status_code == 200
 
 
+def test_disable_join_link_blocks_joins_until_refresh_and_keeps_older_links_expired(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        session_id = _create_session(client, "Disable Join Link Session")
+        app_module.upsert_whitelist(session_id, [("20260001", "Alice")])
+
+        first_token = app_module.get_session(session_id)["join_token"]
+        assert client.post(f"/admin/{session_id}/rotate_join_link").status_code == 200
+        second_token = app_module.get_session(session_id)["join_token"]
+        assert client.post(f"/admin/{session_id}/rotate_join_link").status_code == 200
+        third_token = app_module.get_session(session_id)["join_token"]
+        assert len({first_token, second_token, third_token}) == 3
+
+        for token in (first_token, second_token):
+            assert client.get(f"/join/{token}").status_code == 404
+            assert client.post(
+                f"/join/{token}", data={"student_id": "20260001", "name": "Alice"}
+            ).status_code == 404
+
+        assert client.get(f"/join/{third_token}").status_code == 200
+        assert client.post(
+            f"/join/{third_token}",
+            data={"student_id": "20260001", "name": "Alice"},
+            follow_redirects=False,
+        ).status_code == 303
+        disabled = client.post(f"/admin/{session_id}/disable_join_link")
+        assert disabled.status_code == 200
+        assert "Student join link disabled." in disabled.text
+        assert "Disable Join Link" in disabled.text
+        assert f"/join/{third_token}" not in disabled.text
+        assert app_module.get_session(session_id)["join_link_enabled"] == 0
+
+        for token in (first_token, second_token, third_token):
+            assert client.get(f"/join/{token}").status_code == 404
+            assert client.post(
+                f"/join/{token}", data={"student_id": "20260001", "name": "Alice"}
+            ).status_code == 404
+
+        share_page = client.get(f"/admin/{session_id}/share")
+        assert share_page.status_code == 200
+        assert "Join link disabled" in share_page.text
+        assert f"/join/{third_token}" not in share_page.text
+        share_payload = client.get(f"/api/admin/{session_id}/share_link").json()
+        assert share_payload["join_link_enabled"] is False
+        assert share_payload["join_url"] is None
+        assert share_payload["join_qr_data_uri"] is None
+        assert client.get(f"/s/{session_id}/20260001").status_code == 200
+
+        app_module.init_db()
+        assert app_module.get_session(session_id)["join_link_enabled"] == 0
+        assert client.get(f"/join/{third_token}").status_code == 404
+
+        refreshed = client.post(f"/admin/{session_id}/rotate_join_link")
+        assert refreshed.status_code == 200
+        fourth_token = app_module.get_session(session_id)["join_token"]
+        assert fourth_token not in {first_token, second_token, third_token}
+        assert app_module.get_session(session_id)["join_link_enabled"] == 1
+        assert client.get(f"/join/{fourth_token}").status_code == 200
+        for token in (first_token, second_token, third_token):
+            assert client.get(f"/join/{token}").status_code == 404
+
+
+def test_refresh_never_reissues_an_older_join_token(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        session_id = _create_session(client, "Token History Session")
+        first_token = app_module.get_session(session_id)["join_token"]
+        assert client.post(f"/admin/{session_id}/rotate_join_link").status_code == 200
+
+        from public_goods._db import identifiers
+
+        candidates = iter((first_token, "fresh-third-token"))
+        monkeypatch.setattr(identifiers.secrets, "token_urlsafe", lambda _: next(candidates))
+        assert client.post(f"/admin/{session_id}/rotate_join_link").status_code == 200
+        assert app_module.get_session(session_id)["join_token"] == "fresh-third-token"
+        assert client.get(f"/join/{first_token}").status_code == 404
+
+
+def test_join_is_rechecked_before_student_record_is_written(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        session_id = _create_session(client, "Join Disable Race")
+        app_module.upsert_whitelist(session_id, [("20260001", "Alice")])
+        token = app_module.get_session(session_id)["join_token"]
+
+        from public_goods._student import join as student_join
+
+        original_check = student_join.whitelist_check_or_raise
+
+        def disable_after_whitelist_check(*args):
+            original_check(*args)
+            from public_goods._sessions import disable_session_join_link
+
+            disable_session_join_link(session_id)
+
+        monkeypatch.setattr(student_join, "whitelist_check_or_raise", disable_after_whitelist_check)
+        response = client.post(
+            f"/join/{token}", data={"student_id": "20260001", "name": "Alice"}
+        )
+        assert response.status_code == 404
+        assert app_module.get_session(session_id)["join_link_enabled"] == 0
+        assert app_module.list_students(session_id) == []
+
+
 def test_admin_can_rotate_teacher_owned_session_join_link(monkeypatch, tmp_path: Path):
     app_module, _ = _load_app(
         monkeypatch,
@@ -1576,6 +1701,35 @@ def test_teacher_cannot_rotate_other_users_join_link(monkeypatch, tmp_path: Path
         response = client.post(f"/admin/{session_id}/rotate_join_link", follow_redirects=False)
         assert response.status_code == 404
         assert app_module.get_session(session_id)["join_token"] == old_join_token
+
+
+def test_teacher_cannot_disable_other_users_join_link(monkeypatch, tmp_path: Path):
+    app_module, _ = _load_app(
+        monkeypatch,
+        tmp_path,
+        admin_password="bootstrap-secret",
+        secret_key="secret-for-tests",
+    )
+
+    with TestClient(app_module.app) as client:
+        assert _login(client, "admin", "bootstrap-secret").status_code == 303
+        teacher1_temp = _create_teacher(client, "Teacher1")
+        teacher2_temp = _create_teacher(client, "Teacher2")
+
+        assert _login(client, "Teacher1", teacher1_temp).status_code == 303
+        assert _change_password(client, teacher1_temp, "Teacher1-final-pass").status_code == 303
+        assert _login(client, "Teacher1", "Teacher1-final-pass").status_code == 303
+        session_id = _create_session(client, "Teacher1 Join Link")
+        token = app_module.get_session(session_id)["join_token"]
+
+        assert _login(client, "Teacher2", teacher2_temp).status_code == 303
+        assert _change_password(client, teacher2_temp, "Teacher2-final-pass").status_code == 303
+        assert _login(client, "Teacher2", "Teacher2-final-pass").status_code == 303
+
+        response = client.post(f"/admin/{session_id}/disable_join_link")
+        assert response.status_code == 404
+        assert app_module.get_session(session_id)["join_link_enabled"] == 1
+        assert client.get(f"/join/{token}").status_code == 200
 
 
 def test_session_panel_includes_share_link_button(monkeypatch, tmp_path: Path):

@@ -58,3 +58,18 @@ def _generate_unique_token_conn(
             return token
     raise RuntimeError(f"Failed to generate a unique token for {table}.{column}")
 
+
+def issue_join_token_conn(conn: sqlite3.Connection, *, reserved: Optional[set[str]] = None) -> str:
+    """Reserve a token permanently so refreshing cannot reactivate an old link."""
+    reserved = reserved or set()
+    for _ in range(100):
+        token = secrets.token_urlsafe(12)
+        if token in reserved:
+            continue
+        if conn.execute("SELECT 1 FROM sessions WHERE join_token=?", (token,)).fetchone():
+            continue
+        cursor = conn.execute("INSERT OR IGNORE INTO issued_join_tokens(token) VALUES(?)", (token,))
+        if cursor.rowcount == 1:
+            return token
+    raise RuntimeError("Failed to issue a unique join token")
+

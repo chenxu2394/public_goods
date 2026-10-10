@@ -6,7 +6,7 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 
 from ...read_models import build_export_csv
-from ..._sessions import clear_whitelist, get_session, parse_whitelist_csv, rotate_session_join_token, upsert_whitelist, whitelist_template_csv
+from ..._sessions import clear_whitelist, disable_session_join_link, get_session, parse_whitelist_csv, rotate_session_join_token, upsert_whitelist, whitelist_template_csv
 from ..helpers import require_management_session
 from .common import session_panel_response, share_link_page_response
 
@@ -34,7 +34,23 @@ def admin_rotate_join_link(request: Request, session_id: str):
         request,
         user,
         updated_sess,
-        join_link_success="Student join link refreshed. The previous join link no longer accepts new joins.",
+        join_link_success="Student join link refreshed. All previous join links no longer accept new joins.",
+    )
+
+
+@router.post("/admin/{session_id}/disable_join_link")
+def admin_disable_join_link(request: Request, session_id: str):
+    user, _, gate = require_management_session(request, session_id)
+    if gate:
+        return gate
+
+    disable_session_join_link(session_id)
+    updated_sess = get_session(session_id)
+    return session_panel_response(
+        request,
+        user,
+        updated_sess,
+        join_link_success="Student join link disabled. No join links accept new joins.",
     )
 
 

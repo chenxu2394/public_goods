@@ -21,8 +21,15 @@ def qr_svg_data_uri(content: str) -> str:
 
 
 def build_share_link_context(sess: sqlite3.Row) -> ShareLinkContext:
+    if not bool(sess["join_link_enabled"]):
+        return {
+            "join_link_enabled": False,
+            "join_url": None,
+            "join_qr_data_uri": None,
+        }
     join_url = f"{PUBLIC_BASE_URL}/join/{sess['join_token']}"
     return {
+        "join_link_enabled": True,
         "join_url": join_url,
         "join_qr_data_uri": qr_svg_data_uri(join_url),
     }
@@ -45,6 +52,7 @@ def build_share_link_api_payload(sess: sqlite3.Row) -> Dict[str, object]:
             "id": sess["id"],
             "title": sess["title"],
         },
+        "join_link_enabled": payload["join_link_enabled"],
         "join_url": payload["join_url"],
         "join_qr_data_uri": payload["join_qr_data_uri"],
     }

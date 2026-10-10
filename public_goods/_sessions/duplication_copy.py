@@ -5,7 +5,7 @@ from typing import Dict, Tuple
 
 from fastapi import HTTPException
 
-from ..db import _generate_unique_token_conn, now_iso
+from ..db import _generate_unique_token_conn, issue_join_token_conn, now_iso
 from .bootstrap import _get_admin_user_conn
 
 
@@ -34,13 +34,7 @@ def _insert_admin_owned_session_copy_conn(
     action_open: int,
 ) -> str:
     new_session_id = _generate_unique_token_conn(conn, "sessions", "id", nbytes=6)
-    join_token = _generate_unique_token_conn(
-        conn,
-        "sessions",
-        "join_token",
-        nbytes=6,
-        reserved={new_session_id, str(sess["id"])},
-    )
+    join_token = issue_join_token_conn(conn, reserved={new_session_id, str(sess["id"])})
     created_at = now_iso()
     conn.execute(
         """

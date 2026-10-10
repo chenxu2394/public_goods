@@ -15,7 +15,7 @@ def submit_student_join(join_token: str, student_id: str, name: str) -> tuple[st
         raise HTTPException(400, "student_id and name required")
 
     whitelist_check_or_raise(session_id, student_id, name)
-    upsert_joined_student(session_id, student_id, name)
+    upsert_joined_student(session_id, student_id, name, join_token)
 
     if int(sess["locked"]) == 1:
         assign_late_joiner(session_id)

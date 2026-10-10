@@ -101,6 +101,7 @@ def build_session_panel_context(
         "sess": sess,
         "students": students,
         "counts": counts,
+        "join_link_enabled": share_ctx["join_link_enabled"],
         "join_url": share_ctx["join_url"],
         "join_qr_data_uri": share_ctx["join_qr_data_uri"],
         "share_url": share_url,

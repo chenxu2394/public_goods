@@ -4,6 +4,8 @@ import secrets
 import sqlite3
 from typing import Dict, List, Optional
 
+from fastapi import HTTPException
+
 from ..db import _generate_anonymous_id, _run_write_with_retry, db, now_iso
 
 
@@ -59,8 +61,16 @@ def session_counts(session_id: str) -> Dict[str, int]:
     }
 
 
-def upsert_joined_student(session_id: str, student_id: str, name: str) -> str:
+def upsert_joined_student(session_id: str, student_id: str, name: str, join_token: str) -> str:
     def _write_join(conn: sqlite3.Connection) -> str:
+        conn.execute("BEGIN IMMEDIATE")
+        active_link = conn.execute(
+            "SELECT 1 FROM sessions WHERE id=? AND join_token=? AND join_link_enabled=1",
+            (session_id, join_token),
+        ).fetchone()
+        if not active_link:
+            raise HTTPException(404, "Join link is invalid or expired.")
+
         existing = conn.execute(
             "SELECT id, anonymous_id FROM students WHERE session_id=? AND student_id=?",
             (session_id, student_id),

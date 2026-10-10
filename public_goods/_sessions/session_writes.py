@@ -6,7 +6,7 @@ import sqlite3
 from fastapi import HTTPException
 
 from ..config import TOTAL_EXPERIMENT_ROUNDS
-from ..db import _generate_unique_token_conn, db, now_iso
+from ..db import db, issue_join_token_conn, now_iso
 from .bootstrap import _get_admin_user_conn
 
 
@@ -30,7 +30,7 @@ def create_session_record(
 ) -> str:
     session_id = secrets.token_urlsafe(6)
     conn = db()
-    join_token = _generate_unique_token_conn(conn, "sessions", "join_token", nbytes=6, reserved={session_id})
+    join_token = issue_join_token_conn(conn, reserved={session_id})
     conn.execute(
         """
         INSERT INTO sessions(
@@ -103,19 +103,28 @@ def archive_session_to_admin(session_id: str, removed_by_user_id: str) -> None:
 def rotate_session_join_token(session_id: str) -> str:
     conn = db()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         sess = conn.execute("SELECT join_token FROM sessions WHERE id=?", (session_id,)).fetchone()
         if not sess:
             raise HTTPException(404, "Session not found")
-        new_join_token = _generate_unique_token_conn(
-            conn,
-            "sessions",
-            "join_token",
-            nbytes=6,
-            reserved={str(sess["join_token"] or ""), str(session_id)},
+        new_join_token = issue_join_token_conn(
+            conn, reserved={str(sess["join_token"] or ""), str(session_id)}
         )
-        conn.execute("UPDATE sessions SET join_token=? WHERE id=?", (new_join_token, session_id))
+        conn.execute(
+            "UPDATE sessions SET join_token=?, join_link_enabled=1 WHERE id=?",
+            (new_join_token, session_id),
+        )
         conn.commit()
         return new_join_token
+    finally:
+        conn.close()
+
+
+def disable_session_join_link(session_id: str) -> None:
+    conn = db()
+    try:
+        conn.execute("UPDATE sessions SET join_link_enabled=0 WHERE id=?", (session_id,))
+        conn.commit()
     finally:
         conn.close()
 

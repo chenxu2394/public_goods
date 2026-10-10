@@ -23,6 +23,10 @@ def init_db() -> None:
             _backfill_session_owners(conn, admin_user["id"])
 
         _backfill_session_join_tokens(conn)
+        conn.execute(
+            "INSERT OR IGNORE INTO issued_join_tokens(token) "
+            "SELECT join_token FROM sessions WHERE join_token IS NOT NULL"
+        )
         create_session_join_token_index(conn)
         _backfill_anonymous_ids(conn)
 

@@ -11,6 +11,7 @@ from ._db.identifiers import (
     _backfill_anonymous_ids,
     _generate_anonymous_id,
     _generate_unique_token_conn,
+    issue_join_token_conn,
 )
 from ._db.init import init_db
 from ._db.migrations import (
@@ -28,6 +29,7 @@ __all__ = [
     "_ensure_column",
     "_generate_anonymous_id",
     "_generate_unique_token_conn",
+    "issue_join_token_conn",
     "_get_setting_conn",
     "_is_locked_sqlite_error",
     "_migrate_student_identifier_columns",

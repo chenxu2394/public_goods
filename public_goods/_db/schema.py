@@ -46,7 +46,16 @@ def create_schema(conn: sqlite3.Connection) -> None:
         round_open INTEGER NOT NULL DEFAULT 0,
         action_open INTEGER NOT NULL DEFAULT 0,
         demo_mode INTEGER NOT NULL DEFAULT 0,
-        join_token TEXT
+        join_token TEXT,
+        join_link_enabled INTEGER NOT NULL DEFAULT 1
+    )
+    """
+    )
+
+    cur.execute(
+        """
+    CREATE TABLE IF NOT EXISTS issued_join_tokens(
+        token TEXT PRIMARY KEY
     )
     """
     )

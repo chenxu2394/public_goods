@@ -39,7 +39,7 @@ def get_session_by_join_token(join_token: str) -> sqlite3.Row:
         FROM sessions s
         LEFT JOIN users owner ON owner.id=s.owner_user_id
         LEFT JOIN users removed_by ON removed_by.id=s.teacher_removed_by_user_id
-        WHERE s.join_token=?
+        WHERE s.join_token=? AND s.join_link_enabled=1
     """,
         (join_token,),
     ).fetchone()

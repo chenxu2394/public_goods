@@ -35,6 +35,7 @@ def apply_schema_migrations(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "sessions", "current_phase", "TEXT")
     _ensure_column(conn, "sessions", "demo_mode", "INTEGER NOT NULL DEFAULT 0")
     _ensure_column(conn, "sessions", "join_token", "TEXT")
+    _ensure_column(conn, "sessions", "join_link_enabled", "INTEGER NOT NULL DEFAULT 1")
     _ensure_column(conn, "sessions", "owner_user_id", "TEXT")
     _ensure_column(conn, "sessions", "teacher_removed_at", "TEXT")
     _ensure_column(conn, "sessions", "teacher_removed_by_user_id", "TEXT")

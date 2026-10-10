@@ -74,22 +74,27 @@
     </form>
     <div class="muted" style="margin-bottom:8px;">Copies only the session settings and whitelist, then resets the duplicate to a fresh admin-owned session.</div>
   {% endif %}
-  <div><b>Student join link:</b> <span class="mono">{{ join_url }}</span></div>
-  <div class="muted">Share this link with students.</div>
-  <div style="margin-top:12px;">
-    <img
-      src="{{ join_qr_data_uri }}"
-      alt="QR code for the student join link"
-      style="display:block; width:min(220px, 100%); height:auto; padding:10px; border:1px solid #e5e5e5; border-radius:12px; background:#fff;"
-    />
-    <div class="muted" style="margin-top:8px;">Students can scan this QR code to open the join page on their phones.</div>
-  </div>
+  {% if join_link_enabled %}
+    <div><b>Student join link:</b> <span class="mono">{{ join_url }}</span></div>
+    <div class="muted">Share this link with students.</div>
+    <div style="margin-top:12px;">
+      <img
+        src="{{ join_qr_data_uri }}"
+        alt="QR code for the student join link"
+        style="display:block; width:min(220px, 100%); height:auto; padding:10px; border:1px solid #e5e5e5; border-radius:12px; background:#fff;"
+      />
+      <div class="muted" style="margin-top:8px;">Students can scan this QR code to open the join page on their phones.</div>
+    </div>
+  {% else %}
+    <div><b>Student join link:</b> Disabled</div>
+    <div class="muted">Students cannot join with any previously shared link. Refresh to create a new one.</div>
+  {% endif %}
   <div class="row" style="margin-top:12px; align-items:flex-end;">
     <div class="col" style="flex:0 0 auto; min-width:0;">
       <form method="post" action="/admin/{{ sess.id }}/rotate_join_link">
         <button
           type="submit"
-          onclick="return confirm('Refresh the student join link and QR code? The previous join link will stop working immediately for new joins.');"
+          onclick="return confirm('Refresh the student join link and QR code? All previous join links will stop working immediately for new joins.');"
         >
           Refresh Join Link
         </button>
@@ -99,6 +104,17 @@
       <a href="{{ share_url }}" target="_blank" rel="noopener noreferrer">
         <button type="button">Share Join Link</button>
       </a>
+    </div>
+    <div class="col" style="flex:0 0 auto; min-width:0;">
+      <form method="post" action="/admin/{{ sess.id }}/disable_join_link">
+        <button
+          type="submit"
+          {% if not join_link_enabled %}disabled{% endif %}
+          onclick="return confirm('Disable the student join link? Students will not be able to join until you refresh it.');"
+        >
+          Disable Join Link
+        </button>
+      </form>
     </div>
   </div>
   <div class="muted" style="margin-top:8px;">Use this when you need a new student join link without changing the session itself.</div>

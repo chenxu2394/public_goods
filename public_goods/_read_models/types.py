@@ -7,8 +7,9 @@ from fastapi import Request
 
 
 class ShareLinkContext(TypedDict):
-    join_url: str
-    join_qr_data_uri: str
+    join_link_enabled: bool
+    join_url: str | None
+    join_qr_data_uri: str | None
 
 
 class LoginPageContext(TypedDict, total=False):
@@ -43,8 +44,9 @@ class SessionPanelContext(TypedDict, total=False):
     sess: sqlite3.Row
     students: List[sqlite3.Row]
     counts: Dict[str, int]
-    join_url: str
-    join_qr_data_uri: str
+    join_link_enabled: bool
+    join_url: str | None
+    join_qr_data_uri: str | None
     share_url: str
     export_url: str
     template_url: str
