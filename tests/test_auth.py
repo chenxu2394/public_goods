@@ -624,6 +624,8 @@ def test_easy_auth_allows_only_preapproved_teacher_accounts(monkeypatch, tmp_pat
 
         public_join = client.get("/join/not-a-real-token")
         assert public_join.status_code == 404
+        assert public_join.headers["content-type"].startswith("text/html")
+        assert "Join link unavailable" in public_join.text
 
 
 def test_easy_auth_migrates_existing_admin_without_replacing_identity(monkeypatch, tmp_path: Path):
@@ -1498,6 +1500,8 @@ def test_teacher_can_rotate_join_link_and_old_link_expires(monkeypatch, tmp_path
 
         stale_get = client.get(f"/join/{old_join_token}", follow_redirects=False)
         assert stale_get.status_code == 404
+        assert stale_get.headers["content-type"].startswith("text/html")
+        assert "Ask your teacher for the current link or QR code" in stale_get.text
 
         stale_post = client.post(
             f"/join/{old_join_token}",
@@ -1505,6 +1509,8 @@ def test_teacher_can_rotate_join_link_and_old_link_expires(monkeypatch, tmp_path
             follow_redirects=False,
         )
         assert stale_post.status_code == 404
+        assert stale_post.headers["content-type"].startswith("text/html")
+        assert "Join link unavailable" in stale_post.text
 
         fresh_get = client.get(f"/join/{new_join_token}")
         assert fresh_get.status_code == 200
@@ -1643,6 +1649,8 @@ def test_join_is_rechecked_before_student_record_is_written(monkeypatch, tmp_pat
             f"/join/{token}", data={"student_id": "20260001", "name": "Alice"}
         )
         assert response.status_code == 404
+        assert response.headers["content-type"].startswith("text/html")
+        assert "Join link unavailable" in response.text
         assert app_module.get_session(session_id)["join_link_enabled"] == 0
         assert app_module.list_students(session_id) == []
 

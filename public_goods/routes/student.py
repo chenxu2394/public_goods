@@ -22,9 +22,23 @@ from ..views import templates
 router = APIRouter()
 
 
+def _join_link_unavailable(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "join_unavailable.html",
+        {"request": request},
+        status_code=404,
+    )
+
+
 @router.get("/join/{join_token}", response_class=HTMLResponse)
 def join_page(request: Request, join_token: str):
-    sess = get_session_by_join_token(join_token)
+    try:
+        sess = get_session_by_join_token(join_token)
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
+        return _join_link_unavailable(request)
     session_id = str(sess["id"])
     counts = session_counts(session_id)
     return templates.TemplateResponse(
@@ -39,9 +53,16 @@ def join_submit(request: Request, join_token: str, student_id: str = Form(...), 
     try:
         session_id, student_id = submit_student_join(join_token, student_id, name)
     except HTTPException as exc:
+        if exc.status_code == 404:
+            return _join_link_unavailable(request)
         if exc.status_code not in (400, 403):
             raise
-        sess = get_session_by_join_token(join_token)
+        try:
+            sess = get_session_by_join_token(join_token)
+        except HTTPException as link_exc:
+            if link_exc.status_code != 404:
+                raise
+            return _join_link_unavailable(request)
         return templates.TemplateResponse(
             request,
             "join.html",
