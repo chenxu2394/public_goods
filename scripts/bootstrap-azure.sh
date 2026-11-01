@@ -47,7 +47,7 @@ BOOTSTRAP_RESOURCE_GROUP="${BOOTSTRAP_RESOURCE_GROUP:-$(read_config_string boots
 APPLICATION_RESOURCE_GROUP="${APPLICATION_RESOURCE_GROUP:-$(read_config_string applicationResourceGroupName)}"
 IDENTITY_NAME="${IDENTITY_NAME:-$(read_config_string identityName)}"
 TEST_WEBAPP_NAME="${TEST_WEBAPP_NAME:-$(read_config_string testWebAppName)}"
-PRODUCTION_WEBAPP_NAME="${PRODUCTION_WEBAPP_NAME:-public-goods}"
+PRODUCTION_WEBAPP_NAME="${PRODUCTION_WEBAPP_NAME:-$(read_config_string productionWebAppName)}"
 DEPLOYMENT_NAME="${DEPLOYMENT_NAME:-public-goods-bootstrap}"
 
 gh api "repos/${REPOSITORY}" >/dev/null 2>&1 \
@@ -132,6 +132,7 @@ PRODUCTION_SETTINGS="$(
 MICROSOFT_AUTH_CLIENT_ID="$(printf '%s' "${PRODUCTION_SETTINGS}" | jq -r '.[] | select(.name == "MICROSOFT_AUTH_CLIENT_ID") | .value')"
 MICROSOFT_AUTH_SECRET="$(printf '%s' "${PRODUCTION_SETTINGS}" | jq -r '.[] | select(.name == "MICROSOFT_PROVIDER_AUTHENTICATION_SECRET") | .value')"
 ADMIN_EMAIL="$(printf '%s' "${PRODUCTION_SETTINGS}" | jq -r '.[] | select(.name == "ADMIN_EMAIL") | .value')"
+PRODUCTION_SECRET_KEY="$(printf '%s' "${PRODUCTION_SETTINGS}" | jq -r '.[] | select(.name == "SECRET_KEY") | .value')"
 
 [[ -n "${MICROSOFT_AUTH_CLIENT_ID}" && "${MICROSOFT_AUTH_CLIENT_ID}" != "null" ]] \
   || die "Production is missing MICROSOFT_AUTH_CLIENT_ID."
@@ -139,6 +140,8 @@ ADMIN_EMAIL="$(printf '%s' "${PRODUCTION_SETTINGS}" | jq -r '.[] | select(.name 
   || die "Production is missing MICROSOFT_PROVIDER_AUTHENTICATION_SECRET."
 [[ -n "${ADMIN_EMAIL}" && "${ADMIN_EMAIL}" != "null" ]] \
   || die "Production is missing ADMIN_EMAIL."
+[[ -n "${PRODUCTION_SECRET_KEY}" && "${PRODUCTION_SECRET_KEY}" != "null" ]] \
+  || die "Production is missing SECRET_KEY."
 
 info "Appending the test callback to the existing Microsoft app registration..."
 REDIRECT_URIS=()
@@ -161,12 +164,15 @@ else
   info "The test callback is already registered."
 fi
 
-info "Setting GitHub repository secrets used by Azure login and the test app..."
+info "Setting GitHub repository secrets used by Azure login and the Web Apps..."
 printf '%s' "${CLIENT_ID}" | gh secret set AZURE_CLIENT_ID --repo "${REPOSITORY}"
 printf '%s' "${TENANT_ID}" | gh secret set AZURE_TENANT_ID --repo "${REPOSITORY}"
 printf '%s' "${SUBSCRIPTION_ID}" | gh secret set AZURE_SUBSCRIPTION_ID --repo "${REPOSITORY}"
 printf '%s' "${ADMIN_EMAIL}" | gh secret set TEST_ADMIN_EMAIL --repo "${REPOSITORY}"
 printf '%s' "${MICROSOFT_AUTH_SECRET}" | gh secret set TEST_MICROSOFT_PROVIDER_AUTHENTICATION_SECRET --repo "${REPOSITORY}"
+printf '%s' "${ADMIN_EMAIL}" | gh secret set PRODUCTION_ADMIN_EMAIL --repo "${REPOSITORY}"
+printf '%s' "${MICROSOFT_AUTH_SECRET}" | gh secret set PRODUCTION_MICROSOFT_PROVIDER_AUTHENTICATION_SECRET --repo "${REPOSITORY}"
+printf '%s' "${PRODUCTION_SECRET_KEY}" | gh secret set PRODUCTION_SECRET_KEY --repo "${REPOSITORY}"
 
 if gh secret list --repo "${REPOSITORY}" --json name --jq '.[].name' | grep -qx 'TEST_SECRET_KEY'; then
   info "Reusing the existing TEST_SECRET_KEY GitHub secret."
@@ -175,13 +181,13 @@ else
   openssl rand -hex 32 | gh secret set TEST_SECRET_KEY --repo "${REPOSITORY}"
 fi
 
-info "Setting GitHub repository variables used by the test deployment workflow..."
+info "Setting GitHub repository variables used by the deployment workflows..."
 gh variable set AZURE_RESOURCE_GROUP --body "${APPLICATION_RESOURCE_GROUP}" --repo "${REPOSITORY}"
 gh variable set AZURE_DEPLOYMENT_BRANCH --body "${DEPLOYMENT_BRANCH}" --repo "${REPOSITORY}"
 gh variable set MICROSOFT_AUTH_CLIENT_ID --body "${MICROSOFT_AUTH_CLIENT_ID}" --repo "${REPOSITORY}"
 gh variable set AZURE_BOOTSTRAPPED --body 'true' --repo "${REPOSITORY}"
 
-unset PRODUCTION_SETTINGS MICROSOFT_AUTH_SECRET ADMIN_EMAIL
+unset PRODUCTION_SETTINGS MICROSOFT_AUTH_SECRET ADMIN_EMAIL PRODUCTION_SECRET_KEY
 
 cat <<EOF
 
@@ -190,6 +196,6 @@ Bootstrap complete for ${REPOSITORY}:${DEPLOYMENT_BRANCH}.
 Next, preview the test infrastructure from GitHub Actions:
   gh workflow run deploy-azure-test.yml -f operation=whatIf --repo ${REPOSITORY}
 
-After reviewing that run, create the test app with:
-  gh workflow run deploy-azure-test.yml -f operation=create --repo ${REPOSITORY}
+Preview the production adoption with:
+  gh workflow run deploy-azure-production.yml -f operation=whatIf --repo ${REPOSITORY}
 EOF

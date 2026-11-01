@@ -13,8 +13,8 @@ param appServicePlanName string
 ])
 param appServicePlanSku string = 'F1'
 
-@description('Globally unique name of the test Web App.')
-param testWebAppName string
+@description('Globally unique name of the Web App managed by this deployment.')
+param webAppName string
 
 @description('Public GHCR container image including an immutable tag.')
 param containerImage string
@@ -27,20 +27,23 @@ param microsoftAuthClientId string
 param microsoftProviderAuthenticationSecret string
 
 @secure()
-@description('Test-only key used to sign application cookies.')
+@description('Key used to sign application cookies.')
 param secretKey string
 
 @secure()
-@description('Microsoft account preapproved as the application administrator.')
+@description('Microsoft account preapproved as this deployment\'s application administrator.')
 param adminEmail string
+
+@description('Whether App Service client-affinity cookies are enabled.')
+param clientAffinityEnabled bool = false
 
 var isFreeTier = appServicePlanSku == 'F1'
 var appServicePlanTier = isFreeTier ? 'Free' : 'Basic'
 var appServicePlanFamily = isFreeTier ? 'F' : 'B'
-var testWebAppUrl = 'https://${testWebAppName}.azurewebsites.net'
+var webAppUrl = 'https://${webAppName}.azurewebsites.net'
 
-// This root template is the single owner of the shared plan. Later production
-// adoption should be added here rather than declaring the plan in another root.
+// The same desired plan definition is used by the test and production parameter
+// files. Each incremental deployment then manages its selected Web App normally.
 resource appServicePlan 'Microsoft.Web/serverfarms@2024-11-01' = {
   name: appServicePlanName
   location: location
@@ -61,14 +64,14 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2024-11-01' = {
   }
 }
 
-resource testWebApp 'Microsoft.Web/sites@2024-11-01' = {
-  name: testWebAppName
+resource webApp 'Microsoft.Web/sites@2024-11-01' = {
+  name: webAppName
   location: location
   kind: 'app,linux,container'
   properties: {
     serverFarmId: appServicePlan.id
     httpsOnly: true
-    clientAffinityEnabled: false
+    clientAffinityEnabled: clientAffinityEnabled
     publicNetworkAccess: 'Enabled'
     siteConfig: {
       linuxFxVersion: 'DOCKER|${containerImage}'
@@ -76,54 +79,31 @@ resource testWebApp 'Microsoft.Web/sites@2024-11-01' = {
       ftpsState: 'Disabled'
       http20Enabled: true
       minTlsVersion: '1.2'
-      appSettings: [
-        {
-          name: 'ADMIN_COOKIE_SECURE'
-          value: '1'
-        }
-        {
-          name: 'ADMIN_EMAIL'
-          value: adminEmail
-        }
-        {
-          name: 'AUTH_MODE'
-          value: 'easy_auth'
-        }
-        {
-          name: 'MICROSOFT_AUTH_CLIENT_ID'
-          value: microsoftAuthClientId
-        }
-        {
-          name: 'MICROSOFT_PROVIDER_AUTHENTICATION_SECRET'
-          value: microsoftProviderAuthenticationSecret
-        }
-        {
-          name: 'PUBLIC_BASE_URL'
-          value: testWebAppUrl
-        }
-        {
-          name: 'PUBLIC_GOODS_DB_PATH'
-          value: '/home/public_goods.db'
-        }
-        {
-          name: 'SECRET_KEY'
-          value: secretKey
-        }
-        {
-          name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE'
-          value: 'true'
-        }
-        {
-          name: 'WEBSITES_PORT'
-          value: '8000'
-        }
-      ]
     }
   }
 }
 
-resource testEasyAuth 'Microsoft.Web/sites/config@2024-11-01' = {
-  parent: testWebApp
+// Declaring the complete map as a child resource makes Bicep authoritative for
+// settings and removes obsolete password and private-registry credentials.
+resource appSettings 'Microsoft.Web/sites/config@2024-11-01' = {
+  parent: webApp
+  name: 'appsettings'
+  properties: {
+    ADMIN_COOKIE_SECURE: '1'
+    ADMIN_EMAIL: adminEmail
+    AUTH_MODE: 'easy_auth'
+    MICROSOFT_AUTH_CLIENT_ID: microsoftAuthClientId
+    MICROSOFT_PROVIDER_AUTHENTICATION_SECRET: microsoftProviderAuthenticationSecret
+    PUBLIC_BASE_URL: webAppUrl
+    PUBLIC_GOODS_DB_PATH: '/home/public_goods.db'
+    SECRET_KEY: secretKey
+    WEBSITES_ENABLE_APP_SERVICE_STORAGE: 'true'
+    WEBSITES_PORT: '8000'
+  }
+}
+
+resource easyAuth 'Microsoft.Web/sites/config@2024-11-01' = {
+  parent: webApp
   name: 'authsettingsV2'
   properties: {
     platform: {
@@ -162,23 +142,23 @@ resource testEasyAuth 'Microsoft.Web/sites/config@2024-11-01' = {
   }
 }
 
-resource testScmPublishingPolicy 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2024-11-01' = {
-  parent: testWebApp
+resource scmPublishingPolicy 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2024-11-01' = {
+  parent: webApp
   name: 'scm'
   properties: {
     allow: false
   }
 }
 
-resource testFtpPublishingPolicy 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2024-11-01' = {
-  parent: testWebApp
+resource ftpPublishingPolicy 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2024-11-01' = {
+  parent: webApp
   name: 'ftp'
   properties: {
     allow: false
   }
 }
 
-output testWebAppName string = testWebApp.name
-output testWebAppUrl string = testWebAppUrl
+output webAppName string = webApp.name
+output webAppUrl string = webAppUrl
 output appServicePlanName string = appServicePlan.name
 output containerImage string = containerImage

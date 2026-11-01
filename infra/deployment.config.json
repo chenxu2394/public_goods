@@ -6,6 +6,7 @@
   "identityName": "public-goods-github",
   "appServicePlanName": "PublicGoods-plan",
   "appServicePlanSku": "F1",
+  "productionWebAppName": "public-goods",
   "testWebAppName": "public-goods-test",
   "containerImageName": "public-goods-experiment"
 }

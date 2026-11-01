@@ -92,23 +92,9 @@ DEFAULT_HOSTNAME="$(
 SCM_HOSTNAME="${DEFAULT_HOSTNAME%%.*}.scm.${DEFAULT_HOSTNAME#*.}"
 SCM_URL="https://${SCM_HOSTNAME}"
 
-SCM_USER="$(
-  az webapp deployment list-publishing-credentials \
-    -g "$RESOURCE_GROUP" \
-    -n "$WEBAPP_NAME" \
-    --query publishingUserName \
-    -o tsv
-)"
-SCM_PASS="$(
-  az webapp deployment list-publishing-credentials \
-    -g "$RESOURCE_GROUP" \
-    -n "$WEBAPP_NAME" \
-    --query publishingPassword \
-    -o tsv
-)"
-[[ -n "$SCM_USER" && -n "$SCM_PASS" ]] || {
-  die "Azure did not return Web App publishing credentials."
-}
+SCM_ACCESS_TOKEN="$(az account get-access-token --query accessToken --output tsv)"
+[[ -n "$SCM_ACCESS_TOKEN" ]] || die "Azure CLI did not return a management access token."
+SCM_AUTH_HEADER="Authorization: Bearer ${SCM_ACCESS_TOKEN}"
 
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd -P)"
@@ -131,7 +117,7 @@ cleanup() {
   if [[ "${REMOTE_SNAPSHOT_CREATED:-0}" == "1" ]]; then
     cleanup_http_code="$(
       curl -sS \
-      -u "$SCM_USER:$SCM_PASS" \
+      -H "$SCM_AUTH_HEADER" \
       -X DELETE \
       -H "If-Match: *" \
       "$SCM_URL/api/vfs/$SNAPSHOT_NAME" \
@@ -160,7 +146,7 @@ PAYLOAD="$(
 info "Creating a consistent snapshot of '$REMOTE_DB_PATH'..."
 RESULT="$(
   curl -fsS \
-    -u "$SCM_USER:$SCM_PASS" \
+    -H "$SCM_AUTH_HEADER" \
     -H "Content-Type: application/json" \
     -d "$PAYLOAD" \
     "$SCM_URL/api/command"
@@ -176,7 +162,7 @@ REMOTE_SNAPSHOT_CREATED=1
 
 info "Downloading '$SNAPSHOT_NAME'..."
 curl -fsS \
-  -u "$SCM_USER:$SCM_PASS" \
+  -H "$SCM_AUTH_HEADER" \
   "$SCM_URL/api/vfs/$SNAPSHOT_NAME" \
   -o "$LOCAL_TEMP" || die "Downloading the SQLite snapshot failed."
 

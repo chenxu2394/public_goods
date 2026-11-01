@@ -1,0 +1,126 @@
+name: Preview or Deploy Azure Production App
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - "scripts/**"
+      - "docs/**"
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Preview changes or deploy production
+        required: true
+        default: whatIf
+        type: choice
+        options:
+          - whatIf
+          - create
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  production:
+    needs: checks
+    if: vars.AZURE_BOOTSTRAPPED == 'true' && github.ref_name == vars.AZURE_DEPLOYMENT_BRANCH
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    env:
+      MICROSOFT_AUTH_CLIENT_ID: ${{ vars.MICROSOFT_AUTH_CLIENT_ID }}
+      PRODUCTION_ADMIN_EMAIL: ${{ secrets.PRODUCTION_ADMIN_EMAIL }}
+      PRODUCTION_MICROSOFT_PROVIDER_AUTHENTICATION_SECRET: ${{ secrets.PRODUCTION_MICROSOFT_PROVIDER_AUTHENTICATION_SECRET }}
+      PRODUCTION_SECRET_KEY: ${{ secrets.PRODUCTION_SECRET_KEY }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Validate production configuration
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: |
+          set -euo pipefail
+          required=(
+            AZURE_CLIENT_ID
+            AZURE_TENANT_ID
+            AZURE_SUBSCRIPTION_ID
+            MICROSOFT_AUTH_CLIENT_ID
+            PRODUCTION_ADMIN_EMAIL
+            PRODUCTION_MICROSOFT_PROVIDER_AUTHENTICATION_SECRET
+            PRODUCTION_SECRET_KEY
+          )
+          for name in "${required[@]}"; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Missing GitHub Actions configuration: ${name}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Select immutable container image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_name="$(jq -r '.containerImageName' infra/deployment.config.json)"
+          if [[ -z "${image_name}" || "${image_name}" == "null" ]]; then
+            echo "Missing containerImageName in infra/deployment.config.json" >&2
+            exit 1
+          fi
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "CONTAINER_IMAGE=ghcr.io/${owner_lc}/${image_name}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Set up Docker Buildx
+        if: github.event_name == 'push' || inputs.operation == 'create'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name == 'push' || inputs.operation == 'create'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the immutable production image
+        if: github.event_name == 'push' || inputs.operation == 'create'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ env.CONTAINER_IMAGE }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Log in to Azure with GitHub OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Preview or deploy production infrastructure
+        uses: azure/bicep-deploy@v2.3.0
+        with:
+          type: deployment
+          operation: ${{ github.event_name == 'push' && 'create' || inputs.operation }}
+          name: public-goods-production
+          scope: resourceGroup
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          resource-group-name: ${{ vars.AZURE_RESOURCE_GROUP }}
+          template-file: ./infra/main.bicep
+          parameters-file: ./infra/prod.bicepparam
