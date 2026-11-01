@@ -94,7 +94,7 @@ Use a fresh session for this test so the generated `SMOKE...` student IDs are no
 This app is designed to keep SQLite on `/home/public_goods.db`, which is the persistent App Service filesystem:
 
 - `app.py`
-- `scripts/setup_azure_webapp.sh`
+- `infra/main.bicep`
 
 Download a consistent snapshot of the current live SQLite database directly from the Web App:
 
@@ -102,7 +102,7 @@ Download a consistent snapshot of the current live SQLite database directly from
 ./scripts/download_live_azure_db.sh [resource-group] [webapp-name] [output-directory] [subscription-id]
 ```
 
-With no arguments, the downloader uses resource group `PublicGoods`, Web App `public-goods`, and the current directory. It creates a consistent snapshot with SQLite's online backup API, verifies the downloaded file, and removes the temporary server-side snapshot. It uses the Web App management endpoint directly and does not require an Azure Storage Account.
+With no arguments, the downloader uses resource group `PublicGoods`, Web App `public-goods`, and the current directory. It creates a consistent snapshot with SQLite's online backup API, verifies the downloaded file, and removes the temporary server-side snapshot. It authenticates to the Web App management endpoint with a temporary Azure CLI bearer token, so basic SCM publishing credentials can remain disabled. It does not require an Azure Storage Account.
 
 Important notes:
 
@@ -125,6 +125,7 @@ With only the database filename, the restorer uses resource group `PublicGoods`,
 - requires `WEBSITES_ENABLE_APP_SERVICE_STORAGE=true` and a database path under `/home`
 - displays the exact subscription, Web App, source file, and destination and requires an explicit confirmation
 - stops the main Web App while leaving its Kudu management site available
+- authenticates to Kudu with a temporary Azure CLI bearer token rather than publishing credentials
 - uploads and verifies the snapshot at a temporary path before touching the current database
 - creates a consistent timestamped rollback copy of the current database when one exists
 - removes stale WAL sidecar files and atomically installs the verified snapshot

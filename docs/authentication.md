@@ -1,62 +1,105 @@
 # Authentication and identity
 
-Run the commands in this guide from the repository root.
-
 ## Authentication model
 
-- Admins and teachers sign in with preapproved personal Microsoft accounts through Azure App Service Easy Auth.
-- Students do not create accounts. They scan the session QR code or open its join URL, then enter a student number and name that exactly match the session whitelist.
-- The application stores admin/teacher roles and session ownership locally; Microsoft handles authentication.
-- The initial admin email is read from the ignored local `.env` file and uploaded to Azure App Settings by the setup scripts.
+- Admins and teachers sign in with preapproved personal Microsoft accounts
+  through Azure App Service Easy Auth.
+- Students do not create accounts. They open a session join URL and enter a
+  student number and name that exactly match the uploaded roster.
+- The application stores roles and session ownership locally; Microsoft handles
+  instructor authentication.
+- Azure leaves public student and display routes anonymous, while the
+  application protects administrative routes.
 
-### Existing password admin migration
+Easy Auth injects the authenticated principal into
+`X-MS-CLIENT-PRINCIPAL`. The application trusts that header only when deployed
+behind Azure App Service Easy Auth.
 
-Switching an existing production database from `AUTH_MODE=password` to `AUTH_MODE=easy_auth` does not create a second admin:
+## Azure ownership
 
-1. The existing local user named `admin` keeps the same database user ID and all existing session ownership.
-2. On startup, the app adds the account configured as `ADMIN_EMAIL` to that user if no Microsoft identity is linked yet.
-3. On the first successful Microsoft sign-in, the immutable Microsoft subject ID is linked to that same local user.
-4. Later sign-ins must match that linked Microsoft identity. Matching the email text alone is no longer sufficient.
+The authentication system crosses two management APIs:
 
-The old password hash can remain in the row for migration safety, but password login is ignored while `AUTH_MODE=easy_auth`.
+| Configuration | Owner |
+| --- | --- |
+| App Service `authsettingsV2` | `infra/main.bicep` |
+| Authentication-related App Settings | `infra/main.bicep` |
+| Microsoft Entra application registration | `scripts/configure_azure_easy_auth.sh` |
+| Entra callback URLs and client-secret creation | `scripts/configure_azure_easy_auth.sh` |
+| Secure values consumed by Bicep | Encrypted GitHub Actions secrets |
 
-## Azure App Settings (required)
+The Graph maintenance script deliberately does not update App Service settings
+or Easy Auth directly. After it changes a client ID, administrator identity, or
+provider secret, the appropriate GitHub Actions deployment applies those values
+through Bicep.
 
-The setup scripts apply these settings through Azure CLI:
+## Required App Settings
+
+Bicep maintains the complete App Settings map, including:
 
 - `AUTH_MODE=easy_auth`
-- `ADMIN_EMAIL`: loaded from the local `.env` file by the setup scripts
-- `PUBLIC_BASE_URL`: public HTTPS origin for the app
+- `ADMIN_EMAIL`, supplied through an encrypted environment-specific GitHub secret
+- `MICROSOFT_AUTH_CLIENT_ID`, supplied through a GitHub variable
+- `MICROSOFT_PROVIDER_AUTHENTICATION_SECRET`, supplied through an encrypted
+  environment-specific GitHub secret
+- `PUBLIC_BASE_URL`, derived from the Web App name
 - `PUBLIC_GOODS_DB_PATH=/home/public_goods.db`
 
-`ADMIN_EMAIL` preapproves and binds the initial admin on first Microsoft sign-in. After that first binding, the immutable Microsoft identity is the source of truth rather than the email address.
+`ADMIN_EMAIL` preapproves the initial administrator. After the first successful
+binding, the immutable Microsoft subject ID is the identity source of truth;
+matching the email text alone is insufficient.
 
-## Configure Azure Easy Auth with Azure CLI
+## Microsoft Entra application registration
 
-Azure configuration is intentionally CLI-first. The checked-in authentication template is `.azure/easy-auth.json.template`; no Azure Portal steps are required.
-
-For a Web App that already exists:
+The application registration is a Microsoft Graph object rather than an Azure
+Resource Manager object. Maintain it with:
 
 ```bash
 ./scripts/configure_azure_easy_auth.sh
 ```
 
-Before running it, copy `.env.example` to the ignored `.env` file and set `ADMIN_EMAIL` to the initial admin's personal Microsoft account. The script queries the active Azure CLI subscription at run time. The baked-in resource defaults are resource group `PublicGoods` and Web App `public-goods`. With no arguments, review the displayed target and press Enter to continue. Positional arguments remain available for another deployment.
-
 The script:
 
-- creates or reuses a dedicated app registration with `PersonalMicrosoftAccount` as its audience
-- configures `https://<webapp-name>.azurewebsites.net/.auth/login/aad/callback`
-- creates the client secret only when needed and stores it as a slot-sticky App Service setting
-- uploads `AUTH_MODE` and `ADMIN_EMAIL` from local configuration to Azure App Settings
-- applies and verifies App Service Authentication V2 through `az rest`
-- allows anonymous requests at the Azure edge so student/display routes remain public; the app protects `/admin/*`
+- creates or reuses the dedicated personal-Microsoft-account app registration
+- preserves existing redirect URIs and ensures both production and test callback
+  URLs are present
+- enables ID-token issuance
+- writes the client ID and administrator identity to GitHub Actions
+- creates a client secret only for a new registration, an absent GitHub secret,
+  or an explicitly requested rotation
+- never writes App Service settings or `authsettingsV2` directly
 
-The script is safe to rerun. To intentionally append and activate a new two-year client secret:
+It loads `ADMIN_EMAIL` from the ignored local `.env` file unless the value is
+already present in the process environment. No personal email or secret is
+stored in the repository.
+
+To append and activate a new two-year client secret:
 
 ```bash
 ROTATE_MICROSOFT_CLIENT_SECRET=1 \
 ./scripts/configure_azure_easy_auth.sh
 ```
 
-Easy Auth injects the authenticated principal into `X-MS-CLIENT-PRINCIPAL`. Only trust this mode when the application is reachable through Azure App Service Easy Auth.
+After a registration or secret change, apply the values to both Web Apps:
+
+```bash
+gh workflow run deploy-azure-test.yml --ref main -f operation=create
+gh workflow run deploy-azure-production.yml --ref main -f operation=create
+```
+
+The test app can be stopped again after verification.
+
+## Existing password-admin migration
+
+Switching an existing database from `AUTH_MODE=password` to
+`AUTH_MODE=easy_auth` does not create a second administrator:
+
+1. The existing local user named `admin` keeps its database user ID and session
+   ownership.
+2. On startup, the application adds `ADMIN_EMAIL` to that user if no Microsoft
+   identity is linked yet.
+3. On the first successful Microsoft sign-in, the immutable Microsoft subject
+   ID is linked to the same user.
+4. Later sign-ins must match the linked Microsoft identity.
+
+The old password hash can remain in the row for migration safety, but password
+login is ignored while `AUTH_MODE=easy_auth`.

@@ -46,7 +46,7 @@ Open `http://127.0.0.1:8000/admin` and sign in as `admin` with `local-dev-passwo
 
 ## Technical details
 
-The application uses FastAPI, Jinja2, JavaScript, and SQLite. Docker packages it for Azure App Service; GitHub Actions builds the image, publishes it to GitHub Container Registry, and deploys it.
+The application uses FastAPI, Jinja2, JavaScript, and SQLite. Docker packages it for Azure App Service; GitHub Actions builds the image, publishes it to GitHub Container Registry, authenticates to Azure with OIDC, and applies the Bicep deployment.
 
 ```mermaid
 flowchart LR
@@ -70,8 +70,8 @@ This runs pytest and checks the Jinja templates with djlint. The tests cover exp
 ## Documentation
 
 - [Classroom workflow](docs/classroom-guide.md): detailed instructor and student flow.
-- [Authentication and identity](docs/authentication.md): Microsoft sign-in, roles, migration, and Easy Auth setup.
-- [Azure deployment](docs/deployment.md): container build, GitHub Actions, and setup scripts.
+- [Authentication and identity](docs/authentication.md): Microsoft sign-in, roles, migration, and identity maintenance.
+- [Azure deployment](docs/deployment.md): Bicep ownership, OIDC bootstrap, and deployment workflows.
 - [Operations and database](docs/operations.md): SQLite settings, live smoke testing, and backups.
 - [Local development](docs/development.md): environment settings, development server, and checks.
 
