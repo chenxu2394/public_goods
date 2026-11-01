@@ -1,0 +1,11 @@
+{
+  "location": "eastus2",
+  "bootstrapLocation": "eastus2",
+  "bootstrapResourceGroupName": "public-goods-bootstrap-rg",
+  "applicationResourceGroupName": "PublicGoods",
+  "identityName": "public-goods-github",
+  "appServicePlanName": "PublicGoods-plan",
+  "appServicePlanSku": "F1",
+  "testWebAppName": "public-goods-test",
+  "containerImageName": "public-goods-experiment"
+}

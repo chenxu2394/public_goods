@@ -1,0 +1,94 @@
+name: Preview or Deploy Azure Test App
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Preview changes or create/update the test app
+        required: true
+        default: whatIf
+        type: choice
+        options:
+          - whatIf
+          - create
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  infrastructure:
+    needs: checks
+    if: vars.AZURE_BOOTSTRAPPED == 'true' && github.ref_name == vars.AZURE_DEPLOYMENT_BRANCH
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    env:
+      MICROSOFT_AUTH_CLIENT_ID: ${{ vars.MICROSOFT_AUTH_CLIENT_ID }}
+      TEST_ADMIN_EMAIL: ${{ secrets.TEST_ADMIN_EMAIL }}
+      TEST_MICROSOFT_PROVIDER_AUTHENTICATION_SECRET: ${{ secrets.TEST_MICROSOFT_PROVIDER_AUTHENTICATION_SECRET }}
+      TEST_SECRET_KEY: ${{ secrets.TEST_SECRET_KEY }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Select immutable container image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_name="$(jq -r '.containerImageName' infra/deployment.config.json)"
+          if [[ -z "${image_name}" || "${image_name}" == "null" ]]; then
+            echo "Missing containerImageName in infra/deployment.config.json" >&2
+            exit 1
+          fi
+          owner_lc="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "CONTAINER_IMAGE=ghcr.io/${owner_lc}/${image_name}:${GITHUB_SHA}" >> "${GITHUB_ENV}"
+
+      - name: Set up Docker Buildx
+        if: inputs.operation == 'create'
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        if: inputs.operation == 'create'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the immutable test image
+        if: inputs.operation == 'create'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ env.CONTAINER_IMAGE }}
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Log in to Azure with GitHub OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Preview or deploy the test infrastructure
+        uses: azure/bicep-deploy@v2.3.0
+        with:
+          type: deployment
+          operation: ${{ inputs.operation }}
+          name: public-goods-test
+          scope: resourceGroup
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          resource-group-name: ${{ vars.AZURE_RESOURCE_GROUP }}
+          template-file: ./infra/main.bicep
+          parameters-file: ./infra/test.bicepparam

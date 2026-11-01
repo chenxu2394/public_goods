@@ -110,3 +110,24 @@ Important notes:
 - keep the App Service plan single-instance when using SQLite
 - the snapshot contains every non-deleted teacher session and its roster, contributions, actions, and results
 - treat downloaded databases as sensitive because they contain student identifiers, names, user identity records, and password hashes where password authentication was used
+
+## Restore the live SQLite database
+
+Restore a previously downloaded snapshot into a newly created or existing Web App:
+
+```bash
+./scripts/restore_live_azure_db.sh <database-file> [resource-group] [webapp-name] [subscription-id]
+```
+
+With only the database filename, the restorer uses resource group `PublicGoods`, Web App `public-goods`, and the current Azure CLI subscription. It:
+
+- verifies the local SQLite snapshot before making Azure changes
+- requires `WEBSITES_ENABLE_APP_SERVICE_STORAGE=true` and a database path under `/home`
+- displays the exact subscription, Web App, source file, and destination and requires an explicit confirmation
+- stops the main Web App while leaving its Kudu management site available
+- uploads and verifies the snapshot at a temporary path before touching the current database
+- creates a consistent timestamped rollback copy of the current database when one exists
+- removes stale WAL sidecar files and atomically installs the verified snapshot
+- verifies the installed database and returns the Web App to its original running or stopped state
+
+This is a full database replacement, not a record merge. Restoring an older snapshot recovers records that existed in that snapshot, including a subsequently deleted session, but all other changes made after the snapshot are also rolled back. Selective recovery of one session would require a separate relational-data import process and is not performed by this script.
