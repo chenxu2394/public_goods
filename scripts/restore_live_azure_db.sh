@@ -258,9 +258,9 @@ CURRENT_DB_HTTP_CODE="$(
 if [[ "$CURRENT_DB_HTTP_CODE" == "200" ]]; then
   # The online backup API includes any committed WAL contents in the rollback
   # copy. The main app is stopped, so there are no concurrent writers here.
-  REMOTE_COMMAND="python3 -c m=__import__(\"sqlite3\");p=__import__(\"pathlib\");o=__import__(\"os\");s=m.connect(\"${REMOTE_DB_PATH}\");d=m.connect(\"${REMOTE_ROLLBACK_PATH}\");s.backup(d);d.close();s.close();[x.unlink()for x in[p.Path(\"${REMOTE_DB_PATH}-wal\"),p.Path(\"${REMOTE_DB_PATH}-shm\")]if x.exists()];o.replace(\"${REMOTE_TEMP_PATH}\",\"${REMOTE_DB_PATH}\")"
+  REMOTE_COMMAND="python3 -c \"m=__import__('sqlite3');p=__import__('pathlib');o=__import__('os');s=m.connect('${REMOTE_DB_PATH}');d=m.connect('${REMOTE_ROLLBACK_PATH}');s.backup(d);d.close();s.close();[x.unlink()for x in[p.Path('${REMOTE_DB_PATH}-wal'),p.Path('${REMOTE_DB_PATH}-shm')]if x.exists()];o.replace('${REMOTE_TEMP_PATH}','${REMOTE_DB_PATH}')\""
 elif [[ "$CURRENT_DB_HTTP_CODE" == "404" ]]; then
-  REMOTE_COMMAND="python3 -c o=__import__(\"os\");o.replace(\"${REMOTE_TEMP_PATH}\",\"${REMOTE_DB_PATH}\")"
+  REMOTE_COMMAND="python3 -c \"o=__import__('os');o.replace('${REMOTE_TEMP_PATH}','${REMOTE_DB_PATH}')\""
 else
   die "Unexpected response while inspecting the current database: HTTP ${CURRENT_DB_HTTP_CODE}."
 fi
