@@ -32,7 +32,6 @@ jobs:
     needs: checks
     if: vars.AZURE_BOOTSTRAPPED == 'true' && github.ref_name == vars.AZURE_DEPLOYMENT_BRANCH
     runs-on: ubuntu-latest
-    environment: production
     permissions:
       contents: read
       id-token: write
