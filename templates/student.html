@@ -1,128 +1,308 @@
 {% extends "_base.html" %}
 {% set scroll_page = "student:" ~ sess.id ~ ":" ~ stu.student_id %}
-{% set heading = "Student Page / 学生页面" %}
+{% set heading = "Student Page" %}
 {% set subheading = sess.title %}
 {% block top_right %}
-  <span class="pill">Anonymous ID / 匿名编号 {{ stu.anonymous_id }}</span>
+  <div class="cluster">
+    <label class="field-label" for="student-language" data-i18n="language_label">Language</label>
+    <select id="student-language" aria-label="Page language" style="width:auto; min-width:120px;">
+      <option value="en">English</option>
+      <option value="zh-CN">中文</option>
+    </select>
+    <span class="pill"><span data-i18n="anonymous_id">Anonymous ID</span>: {{ stu.anonymous_id }}</span>
+  </div>
 {% endblock %}
 {% block content %}
-<div class="card">
-  <div><b>Experiment ID / 实验编号:</b> <span class="mono" id="anon_id">{{ stu.anonymous_id }}</span></div>
-  <div>Group / 组别: <span id="group_no">{% if stu.group_no %}{{ stu.group_no }}{% else %}Pending assignment / 待分组{% endif %}</span></div>
-  <div class="muted">This page auto-refreshes. Group members are shown only by anonymous ID. / 本页面会自动刷新。组员仅以匿名编号显示。</div>
-</div>
+<section class="card card-subtle" aria-labelledby="current-status-heading">
+  <div class="section-header">
+    <div>
+      <div class="section-kicker" data-i18n="status_kicker">Live status</div>
+      <h2 id="current-status-heading" style="margin:0; font-size:1.3rem;" data-i18n="current_round_heading">Your current round</h2>
+    </div>
+    <div class="cluster">
+      <span class="pill" id="phase_badge">-</span>
+      <span class="pill" id="stage_badge">-</span>
+    </div>
+  </div>
+  <div class="metric-grid">
+    <div class="metric">
+      <div class="metric-label" data-i18n="round">Round</div>
+      <div class="metric-value"><span id="cur_round">{{ sess.current_round }}</span><span class="muted"> / {{ sess.rounds }}</span></div>
+    </div>
+    <div class="metric">
+      <div class="metric-label" data-i18n="group">Group</div>
+      <div class="metric-value" id="group_no">{% if stu.group_no %}{{ stu.group_no }}{% else %}—{% endif %}</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label" data-i18n="anonymous_id">Anonymous ID</div>
+      <div class="metric-value mono" id="anon_id">{{ stu.anonymous_id }}</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label" data-i18n="completed_for_type">Completed for this type</div>
+      <div class="metric-value" id="phase_progress">0</div>
+    </div>
+  </div>
+  <p class="field-help" data-i18n="auto_refresh_help">This page refreshes automatically. Group members are shown only by anonymous ID.</p>
+</section>
 
-<div class="card">
-  <h3>Current Round Type / 当前轮次类型</h3>
-  <div>
-    Total round / 总轮次: <b id="cur_round">{{ sess.current_round }}</b> / {{ sess.rounds }}
-    <span class="pill" id="phase_badge">-</span>
-    <span class="pill" id="stage_badge">-</span>
-  </div>
-  <div class="muted" style="margin-top:6px;">
-    Completed rounds of this type / 本情境已完成轮数:
-    <b id="phase_progress">0</b>
-  </div>
-  <div class="row" style="margin-top:12px;">
-    <div class="col">
-      <div class="muted">Your phase cumulative income / 你的本情境累计收益</div>
-      <div><b id="student_phase_cumulative">0.00</b></div>
-    </div>
-    <div class="col">
-      <div class="muted">Your phase total contribution / 你的本情境累计贡献</div>
-      <div><b id="student_total_contrib">0</b></div>
-    </div>
-    <div class="col">
-      <div class="muted">Group phase cumulative income / 小组本情境累计收益</div>
-      <div><b id="group_phase_cumulative">0.00</b></div>
-    </div>
-    <div class="col">
-      <div class="muted">Group phase total contribution / 小组本情境累计贡献</div>
-      <div><b id="group_total_contrib">0</b></div>
-    </div>
-  </div>
-  <div class="muted" style="margin-top:12px;">
-    Most recent completed round / 最近完成轮次:
-    <b id="latest_round_summary">-</b>
-  </div>
-  <div class="row" style="margin-top:8px;">
-    <div class="col">
-      <div class="muted">Your latest round income / 你的最近一轮收益</div>
-      <div><b id="student_latest_income">0.00</b></div>
-    </div>
-    <div class="col">
-      <div class="muted">Your latest round contribution / 你的最近一轮贡献</div>
-      <div><b id="student_latest_contrib">0</b></div>
-    </div>
-    <div class="col">
-      <div class="muted">Group latest round income / 小组最近一轮收益</div>
-      <div><b id="group_latest_income">0.00</b></div>
-    </div>
-    <div class="col">
-      <div class="muted">Group latest round contribution / 小组最近一轮贡献</div>
-      <div><b id="group_latest_contrib">0</b></div>
-    </div>
-  </div>
-  <div style="margin-top:10px;">
-    <span class="muted">Completed rounds by type / 各情境已完成轮数:</span>
-    <span id="phase_statuses"></span>
-  </div>
-</div>
-
-<div class="card">
-  <h3>Current Round Action / 当前轮操作</h3>
-  <div style="margin-top:12px;" id="contrib_wrap">
-    <h4 style="margin:0 0 8px 0;">Contribution / 贡献</h4>
+<section class="card action-card" aria-labelledby="current-action-heading">
+  <div class="section-kicker" data-i18n="action_kicker">Do this now</div>
+  <h2 id="current-action-heading" style="margin:0; font-size:1.4rem;" data-i18n="action_heading">Current round action</h2>
+  <div style="margin-top:16px;" id="contrib_wrap">
+    <h3 data-i18n="contribution">Contribution</h3>
     <form id="submit_form">
       <input type="hidden" name="student_id" value="{{ stu.student_id }}"/>
       <div class="row">
         <div class="col">
-          <div class="muted">Contribution / 贡献 (0-{{ sess.endowment }})</div>
+          <label class="field-label" for="contrib" data-i18n="contribution_range" data-endowment="{{ sess.endowment }}">Contribution (0-{{ sess.endowment }})</label>
           <input name="contrib" id="contrib" type="number" min="0" max="{{ sess.endowment }}" value="0"/>
         </div>
         <div class="col" style="align-self:flex-end;">
-          <button type="submit" id="contrib_submit_btn">Submit or Update Contribution / 提交或更新贡献</button>
+          <button type="submit" class="primary" id="contrib_submit_btn" data-i18n="submit_or_update">Submit or update</button>
         </div>
         <div class="col" style="align-self:flex-end;">
-          <span id="submit_msg" class="muted"></span>
+          <span id="submit_msg" class="muted" aria-live="polite"></span>
         </div>
       </div>
     </form>
   </div>
 
   <div style="margin-top:12px; display:none;" id="action_wrap">
-    <h4 style="margin:0 0 8px 0;" id="action_title">Reward or Punishment / 奖励或惩罚</h4>
+    <h4 style="margin:0 0 8px 0;" id="action_title" data-i18n="reward_or_punishment">Reward or Punishment</h4>
     <div class="muted" id="action_desc"></div>
     <div class="muted" id="action_budget_status" style="margin-top:6px;"></div>
     <form id="action_form" style="margin-top:8px;">
       <table id="action_table">
-        <tr><th>Anonymous ID / 匿名编号</th><th>Points / 点数</th></tr>
+        <tr><th data-i18n="anonymous_id">Anonymous ID</th><th data-i18n="points">Points</th></tr>
       </table>
       <div style="margin-top:8px;">
-        <button type="submit" id="action_submit_btn">Submit or Update Actions / 提交或更新操作</button>
-        <span id="action_msg" class="muted" style="margin-left:10px;"></span>
+        <button type="submit" class="primary" id="action_submit_btn" data-i18n="submit_actions">Submit or update actions</button>
+        <span id="action_msg" class="muted" style="margin-left:10px;" aria-live="polite"></span>
       </div>
     </form>
   </div>
-</div>
+</section>
 
-<div class="card" id="group_view_card" style="display:none;">
-  <h3>Current Round Group Contributions / 当前轮小组投入</h3>
-  <div class="muted">Visible only after the teacher opens the reward or punishment stage. / 仅在教师开放奖励或处罚阶段后可见。</div>
+<section class="card" aria-labelledby="current-results-heading">
+  <div class="section-header">
+    <div>
+      <div class="section-kicker" data-i18n="results_kicker">Results</div>
+      <h2 id="current-results-heading" style="margin:0; font-size:1.3rem;" data-i18n="results_heading">Current type totals</h2>
+    </div>
+  </div>
+  <div class="metric-grid">
+    <div class="metric">
+      <div class="metric-label" data-i18n="your_cumulative_income">Your cumulative income</div>
+      <div class="metric-value" id="student_phase_cumulative">0.00</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label" data-i18n="your_total_contribution">Your total contribution</div>
+      <div class="metric-value" id="student_total_contrib">0</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label" data-i18n="group_cumulative_income">Group cumulative income</div>
+      <div class="metric-value" id="group_phase_cumulative">0.00</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label" data-i18n="group_total_contribution">Group total contribution</div>
+      <div class="metric-value" id="group_total_contrib">0</div>
+    </div>
+  </div>
+  <h3 style="margin-top:22px;"><span data-i18n="latest_completed_round">Latest completed round</span> <span class="pill" id="latest_round_summary">-</span></h3>
+  <div class="metric-grid">
+    <div class="metric">
+      <div class="metric-label" data-i18n="your_income">Your income</div>
+      <div class="metric-value" id="student_latest_income">0.00</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label" data-i18n="your_contribution">Your contribution</div>
+      <div class="metric-value" id="student_latest_contrib">0</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label" data-i18n="group_income">Group income</div>
+      <div class="metric-value" id="group_latest_income">0.00</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label" data-i18n="group_contribution">Group contribution</div>
+      <div class="metric-value" id="group_latest_contrib">0</div>
+    </div>
+  </div>
+  <div style="margin-top:16px;">
+    <span class="muted" data-i18n="completed_rounds_by_type">Completed rounds by type:</span>
+    <span id="phase_statuses"></span>
+  </div>
+</section>
+
+<section class="card" id="group_view_card" style="display:none;">
+  <h3 data-i18n="current_group_contributions">Current Round Group Contributions</h3>
+  <div class="muted" data-i18n="group_visibility_help">Visible only after the teacher opens the reward or punishment stage.</div>
   <table id="group_table" style="margin-top:8px;">
-    <tr><th>Anonymous ID / 匿名编号</th><th>Contribution / 贡献</th></tr>
+    <tr><th data-i18n="anonymous_id">Anonymous ID</th><th data-i18n="contribution">Contribution</th></tr>
   </table>
-</div>
+</section>
 
-<div class="card">
-  <h3>Results by Round Type / 各轮次类型结果</h3>
-  <div class="muted">Results remain grouped by the type selected for each round. / 结果会按照每轮选择的情境类型分组保留。</div>
+<section class="card" aria-labelledby="past-results-heading">
+  <h2 id="past-results-heading" style="margin:0 0 8px; font-size:1.3rem;" data-i18n="past_results_heading">Past results by round type</h2>
+  <div class="muted" data-i18n="past_results_help">Results remain grouped by the type selected for each round.</div>
   <div id="completed_phases" style="margin-top:12px;"></div>
-</div>
+</section>
 
 <script>
 const sessionId = "{{ sess.id }}";
 const studentId = "{{ stu.student_id }}";
+const languageStorageKey = "public-goods-student-language";
+const translations = {
+  en: {
+    app_kicker: "Public Goods Experiment",
+    skip_to_main: "Skip to main content",
+    page_heading: "Student Page",
+    page_actions: "Page actions",
+    language_label: "Language",
+    page_language: "Page language",
+    anonymous_id: "Anonymous ID",
+    status_kicker: "Live status",
+    current_round_heading: "Your current round",
+    round: "Round",
+    group: "Group",
+    completed_for_type: "Completed for this type",
+    auto_refresh_help: "This page refreshes automatically. Group members are shown only by anonymous ID.",
+    action_kicker: "Do this now",
+    action_heading: "Current round action",
+    contribution: "Contribution",
+    contribution_range: "Contribution (0-{endowment})",
+    submit_or_update: "Submit or update",
+    reward_or_punishment: "Reward or Punishment",
+    points: "Points",
+    submit_actions: "Submit or update actions",
+    results_kicker: "Results",
+    results_heading: "Current type totals",
+    your_cumulative_income: "Your cumulative income",
+    your_total_contribution: "Your total contribution",
+    group_cumulative_income: "Group cumulative income",
+    group_total_contribution: "Group total contribution",
+    latest_completed_round: "Latest completed round",
+    your_income: "Your income",
+    your_contribution: "Your contribution",
+    group_income: "Group income",
+    group_contribution: "Group contribution",
+    completed_rounds_by_type: "Completed rounds by type:",
+    current_group_contributions: "Current Round Group Contributions",
+    group_visibility_help: "Visible only after the teacher opens the reward or punishment stage.",
+    past_results_heading: "Past results by round type",
+    past_results_help: "Results remain grouped by the type selected for each round.",
+    stage_contribution: "Contribution Open",
+    stage_action: "Action Stage Open",
+    stage_closed: "Round Closed",
+    phase_baseline: "Baseline",
+    phase_reward: "Reward",
+    phase_punishment: "Punishment",
+    phase_waiting: "{phase} · Waiting for teacher selection",
+    phase_round: "{phase} · {round}",
+    phase_status: "{phase} {rounds}",
+    action_cost: "Action cost: {used} / {budget} tokens available.",
+    submitted_contribution: "Submitted contribution: {contribution}",
+    not_submitted: "Not submitted yet",
+    contribution_closed: "Contribution stage closed",
+    reward_stage: "Reward Stage",
+    punishment_stage: "Punishment Stage",
+    reward_description: "Each reward point costs you 1 and gives the target +2 income. You have {pocket} tokens left after contributing and may spend at most {budget} in total.",
+    punishment_description: "Each punishment point costs you 1 and reduces the target by 3. You have {pocket} tokens left after contributing and may spend at most {budget} in total.",
+    no_completed_rounds: "No completed rounds yet.",
+    phase_group: "{phase} / Group {group}",
+    your_total_income: "Your total income",
+    your_final_phase_cumulative: "Your final cumulative income for this type",
+    group_total_income: "Group total income",
+    your_type_performance: "Your performance for this type",
+    group_type_performance: "Group performance for this type",
+    phase_round_heading: "Type Round",
+    income: "Income",
+    phase_cumulative: "Type Cumulative",
+    sent: "Sent",
+    received: "Received",
+    group_total: "Group Total",
+    average_contribution: "Average Contribution",
+    pending_assignment: "Pending assignment",
+    submit_failed: "Submit failed: {detail}",
+    action_budget_exceeded: "Total action cost cannot exceed {budget} tokens.",
+    action_saved: "Action submission saved. Cost: {cost}/{budget}."
+  },
+  "zh-CN": {
+    app_kicker: "公共物品实验",
+    skip_to_main: "跳到主要内容",
+    page_heading: "学生页面",
+    page_actions: "页面操作",
+    language_label: "语言",
+    page_language: "页面语言",
+    anonymous_id: "匿名编号",
+    status_kicker: "实时状态",
+    current_round_heading: "你的当前轮次",
+    round: "轮次",
+    group: "组别",
+    completed_for_type: "本情境已完成",
+    auto_refresh_help: "本页面会自动刷新。组员仅以匿名编号显示。",
+    action_kicker: "当前操作",
+    action_heading: "当前轮操作",
+    contribution: "贡献",
+    contribution_range: "贡献（0-{endowment}）",
+    submit_or_update: "提交或更新",
+    reward_or_punishment: "奖励或惩罚",
+    points: "点数",
+    submit_actions: "提交或更新操作",
+    results_kicker: "结果",
+    results_heading: "当前情境累计",
+    your_cumulative_income: "你的累计收益",
+    your_total_contribution: "你的累计贡献",
+    group_cumulative_income: "小组累计收益",
+    group_total_contribution: "小组累计贡献",
+    latest_completed_round: "最近完成轮次",
+    your_income: "你的收益",
+    your_contribution: "你的贡献",
+    group_income: "小组收益",
+    group_contribution: "小组贡献",
+    completed_rounds_by_type: "各情境已完成轮数：",
+    current_group_contributions: "当前轮小组投入",
+    group_visibility_help: "仅在教师开放奖励或惩罚阶段后可见。",
+    past_results_heading: "各轮次类型结果",
+    past_results_help: "结果会按照每轮选择的情境类型分组保留。",
+    stage_contribution: "贡献阶段开放",
+    stage_action: "操作阶段开放",
+    stage_closed: "本轮已关闭",
+    phase_baseline: "基础阶段",
+    phase_reward: "奖励阶段",
+    phase_punishment: "惩罚阶段",
+    phase_waiting: "{phase} · 等待教师选择",
+    phase_round: "{phase} · {round}",
+    phase_status: "{phase} {rounds}",
+    action_cost: "操作成本：已使用 {used} / 可用 {budget} 代币。",
+    submitted_contribution: "已提交贡献：{contribution}",
+    not_submitted: "尚未提交",
+    contribution_closed: "贡献阶段已关闭",
+    reward_stage: "奖励阶段",
+    punishment_stage: "惩罚阶段",
+    reward_description: "每给予某位组员 1 点奖励，你支付 1 点成本，对方增加 2 点收益。贡献后剩余 {pocket} 枚代币，本阶段总共最多可支付 {budget} 枚代币。",
+    punishment_description: "每给予某位组员 1 点惩罚，你支付 1 点成本，对方减少 3 点收益。贡献后剩余 {pocket} 枚代币，本阶段总共最多可支付 {budget} 枚代币。",
+    no_completed_rounds: "尚无已完成轮次。",
+    phase_group: "{phase} / 第 {group} 组",
+    your_total_income: "你的总收益",
+    your_final_phase_cumulative: "你在此情境下的累计收益",
+    group_total_income: "小组总收益",
+    your_type_performance: "你在此情境下的表现",
+    group_type_performance: "小组在此情境下的表现",
+    phase_round_heading: "情境轮次",
+    income: "收益",
+    phase_cumulative: "情境累计收益",
+    sent: "发出",
+    received: "收到",
+    group_total: "组总贡献",
+    average_contribution: "平均贡献",
+    pending_assignment: "待分组",
+    submit_failed: "提交失败：{detail}",
+    action_budget_exceeded: "操作总成本不能超过 {budget} 枚代币。",
+    action_saved: "操作提交已保存。成本：{cost}/{budget}。"
+  }
+};
+let currentLanguage = "en";
+let latestStatusData = null;
 let contribContextKey = null;
 let contribDraftDirty = false;
 let actionContextKey = null;
@@ -132,24 +312,74 @@ let currentActionBudget = 0;
 let statusRefreshPromise = null;
 let submitInFlight = false;
 
+function t(key, values = {}){
+  const languageStrings = translations[currentLanguage] || translations.en;
+  const template = languageStrings[key] ?? translations.en[key] ?? key;
+  return template.replace(/\{(\w+)\}/g, (match, name) => (
+    Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match
+  ));
+}
+
+function normalizeLanguage(language){
+  return Object.prototype.hasOwnProperty.call(translations, language) ? language : "en";
+}
+
+function readStoredLanguage(){
+  try {
+    return normalizeLanguage(window.localStorage.getItem(languageStorageKey));
+  } catch {
+    return "en";
+  }
+}
+
+function applyStaticTranslations(){
+  document.querySelectorAll("[data-i18n]").forEach(element => {
+    element.textContent = t(element.dataset.i18n, element.dataset);
+  });
+  document.querySelector(".app-kicker").textContent = t("app_kicker");
+  document.querySelector(".app-title").textContent = t("page_heading");
+  document.querySelector(".skip-link").textContent = t("skip_to_main");
+  document.querySelector(".page-actions").setAttribute("aria-label", t("page_actions"));
+  const selector = document.getElementById("student-language");
+  selector.value = currentLanguage;
+  selector.setAttribute("aria-label", t("page_language"));
+  document.title = `${t("page_heading")} · ${t("app_kicker")}`;
+}
+
+function applyLanguage(requestedLanguage, persist = true){
+  currentLanguage = normalizeLanguage(requestedLanguage);
+  document.documentElement.lang = currentLanguage;
+  if(persist){
+    try {
+      window.localStorage.setItem(languageStorageKey, currentLanguage);
+    } catch {
+      // The current page still switches when browser storage is unavailable.
+    }
+  }
+  applyStaticTranslations();
+  if(latestStatusData){
+    renderStatus(latestStatusData);
+  }
+}
+
 function stageText(stage){
-  if(stage === "contribution") return "Contribution Open / 贡献阶段开放";
-  if(stage === "action") return "Action Stage Open / 操作阶段开放";
-  return "Round Closed / 本轮已关闭";
+  if(stage === "contribution") return t("stage_contribution");
+  if(stage === "action") return t("stage_action");
+  return t("stage_closed");
 }
 
 function phaseLabelText(phaseLabel){
-  if(phaseLabel === "Baseline") return "Baseline / 基础阶段";
-  if(phaseLabel === "Reward") return "Reward / 奖励阶段";
-  if(phaseLabel === "Punishment") return "Punishment / 惩罚阶段";
+  if(phaseLabel === "Baseline") return t("phase_baseline");
+  if(phaseLabel === "Reward") return t("phase_reward");
+  if(phaseLabel === "Punishment") return t("phase_punishment");
   return phaseLabel;
 }
 
 function setPhaseAndStage(session){
   const phaseBadge = document.getElementById("phase_badge");
   phaseBadge.innerText = session.phase === null
-    ? `${phaseLabelText(session.phase_label)} / 等待教师选择`
-    : `${phaseLabelText(session.phase_label)} · ${session.phase_round}`;
+    ? t("phase_waiting", {phase: phaseLabelText(session.phase_label)})
+    : t("phase_round", {phase: phaseLabelText(session.phase_label), round: session.phase_round});
   const stageBadge = document.getElementById("stage_badge");
   stageBadge.innerText = stageText(session.stage);
   stageBadge.className = "pill " + (session.stage === "contribution" ? "ok" : (session.stage === "action" ? "warn" : "muted"));
@@ -162,7 +392,10 @@ function renderPhaseStatuses(statuses){
     const span = document.createElement("span");
     span.className = "pill " + (status.active ? "ok" : "muted");
     span.style.marginLeft = "8px";
-    span.innerText = `${phaseLabelText(status.phase_label)} ${status.computed_rounds}`;
+    span.innerText = t("phase_status", {
+      phase: phaseLabelText(status.phase_label),
+      rounds: status.computed_rounds
+    });
     container.appendChild(span);
   });
 }
@@ -217,7 +450,7 @@ function updateActionBudgetStatus(){
   const used = actionPointTotal();
   const status = document.getElementById("action_budget_status");
   const overBudget = used > currentActionBudget;
-  status.innerText = `Action cost: ${used} / ${currentActionBudget} tokens available. / 操作成本：${used} / 可用 ${currentActionBudget} token。`;
+  status.innerText = t("action_cost", {used, budget: currentActionBudget});
   status.className = overBudget ? "pill warn" : "muted";
   document.getElementById("action_submit_btn").disabled = submitInFlight || overBudget;
 }
@@ -238,9 +471,9 @@ function renderContributionStatus(data){
   }
 
   if(hasSubmitted){
-    msg.innerText = `Submitted contribution / 已提交贡献: ${submittedContrib}`;
+    msg.innerText = t("submitted_contribution", {contribution: submittedContrib});
   } else {
-    msg.innerText = data.session.stage === "contribution" ? "Not submitted yet / 尚未提交" : "Contribution stage closed / 贡献阶段已关闭";
+    msg.innerText = data.session.stage === "contribution" ? t("not_submitted") : t("contribution_closed");
   }
 }
 
@@ -267,11 +500,11 @@ function renderActionTargets(data){
   const shouldRebuildTargets = actionContextKey !== nextActionContextKey;
 
   if(data.session.phase === "reward"){
-    title.innerText = "Reward Stage / 奖励阶段";
-    desc.innerText = `Each reward point costs you 1 and gives the target +2 income. You have ${pocketTokens} tokens left after contributing and may spend at most ${currentActionBudget} in total. / 每给予某位组员1点奖励，你支付1点成本，对方增加2点收益。贡献后剩余 ${pocketTokens} token，本阶段总共最多可支付 ${currentActionBudget} token。`;
+    title.innerText = t("reward_stage");
+    desc.innerText = t("reward_description", {pocket: pocketTokens, budget: currentActionBudget});
   }else{
-    title.innerText = "Punishment Stage / 惩罚阶段";
-    desc.innerText = `Each punishment point costs you 1 and reduces the target by 3. You have ${pocketTokens} tokens left after contributing and may spend at most ${currentActionBudget} in total. / 每给予某位组员1点惩罚，你支付1点成本，对方减少3点收益。贡献后剩余 ${pocketTokens} token，本阶段总共最多可支付 ${currentActionBudget} token。`;
+    title.innerText = t("punishment_stage");
+    desc.innerText = t("punishment_description", {pocket: pocketTokens, budget: currentActionBudget});
   }
 
   if(shouldRebuildTargets){
@@ -314,13 +547,16 @@ function renderCompletedPhases(phases){
   container.innerHTML = "";
 
   if(phases.length === 0){
-    container.innerHTML = '<div class="muted">No completed rounds yet. / 尚无已完成轮次。</div>';
+    const emptyState = document.createElement("div");
+    emptyState.className = "muted";
+    emptyState.innerText = t("no_completed_rounds");
+    container.appendChild(emptyState);
     return;
   }
 
   phases.forEach(phase => {
     const wrapper = document.createElement("div");
-    wrapper.className = "card";
+    wrapper.className = "result-panel";
 
     const studentRows = phase.student_rows.map(row => `
       <tr>
@@ -343,40 +579,40 @@ function renderCompletedPhases(phases){
     `).join("");
 
     wrapper.innerHTML = `
-      <h4 style="margin:0 0 8px 0;">${phaseLabelText(phase.phase_label)} / ${phase.group_no} 组</h4>
+      <h4 style="margin:0 0 8px 0;">${t("phase_group", {phase: phaseLabelText(phase.phase_label), group: phase.group_no})}</h4>
       <div class="row">
         <div class="col">
-          <div class="muted">Your total contribution / 你的总贡献</div>
+          <div class="muted">${t("your_total_contribution")}</div>
           <div><b>${phase.student_summary.total_contrib}</b></div>
         </div>
         <div class="col">
-          <div class="muted">Your total income / 你的总收益</div>
+          <div class="muted">${t("your_total_income")}</div>
           <div><b>${phase.student_summary.total_income.toFixed(2)}</b></div>
         </div>
         <div class="col">
-          <div class="muted">Your final phase cumulative / 你的情境累计收益</div>
+          <div class="muted">${t("your_final_phase_cumulative")}</div>
           <div><b>${phase.student_summary.final_phase_cumulative.toFixed(2)}</b></div>
         </div>
         <div class="col">
-          <div class="muted">Group total income / 小组总收益</div>
+          <div class="muted">${t("group_total_income")}</div>
           <div><b>${phase.group_summary.total_income.toFixed(2)}</b></div>
         </div>
       </div>
       <div class="row" style="margin-top:12px;">
         <div class="col">
-          <h5 style="margin:0 0 8px 0;">Your performance for this type / 你在此情境下的表现</h5>
+          <h5 style="margin:0 0 8px 0;">${t("your_type_performance")}</h5>
           <div style="overflow:auto;">
             <table>
-              <tr><th>Phase Round / 情境轮次</th><th>Contribution / 贡献</th><th>Income / 收益</th><th>Phase Cumulative / 情境累计收益</th><th>Sent / 发出</th><th>Received / 收到</th></tr>
+              <tr><th>${t("phase_round_heading")}</th><th>${t("contribution")}</th><th>${t("income")}</th><th>${t("phase_cumulative")}</th><th>${t("sent")}</th><th>${t("received")}</th></tr>
               ${studentRows}
             </table>
           </div>
         </div>
         <div class="col">
-          <h5 style="margin:0 0 8px 0;">Group performance for this type / 小组在此情境下的表现</h5>
+          <h5 style="margin:0 0 8px 0;">${t("group_type_performance")}</h5>
           <div style="overflow:auto;">
             <table>
-              <tr><th>Phase Round / 情境轮次</th><th>Group Total / 组总贡献</th><th>Group Income / 组总收益</th><th>Average Contribution / 平均贡献</th></tr>
+              <tr><th>${t("phase_round_heading")}</th><th>${t("group_total")}</th><th>${t("group_income")}</th><th>${t("average_contribution")}</th></tr>
               ${groupRows}
             </table>
           </div>
@@ -387,13 +623,9 @@ function renderCompletedPhases(phases){
   });
 }
 
-async function fetchStatus(){
-  const res = await fetch(`/api/${sessionId}/status?student_id=${encodeURIComponent(studentId)}`);
-  if(!res.ok) return;
-  const data = await res.json();
-
+function renderStatus(data){
   document.getElementById("cur_round").innerText = data.session.current_round;
-  document.getElementById("group_no").innerText = data.student.group_no ?? "Pending assignment / 待分组";
+  document.getElementById("group_no").innerText = data.student.group_no ?? t("pending_assignment");
   document.getElementById("anon_id").innerText = data.student.anonymous_id;
 
   setPhaseAndStage(data.session);
@@ -411,6 +643,14 @@ async function fetchStatus(){
   renderGroupView(data.current_round.group_view_visible, data.group_view);
   renderActionTargets(data);
   renderCompletedPhases(data.completed_phases);
+}
+
+async function fetchStatus(){
+  const res = await fetch(`/api/${sessionId}/status?student_id=${encodeURIComponent(studentId)}`);
+  if(!res.ok) return;
+  const data = await res.json();
+  latestStatusData = data;
+  renderStatus(data);
 }
 
 async function refreshStatus(){
@@ -446,10 +686,10 @@ document.getElementById("submit_form").addEventListener("submit", async (e) => {
     if(res.ok){
       const data = await res.json();
       contribDraftDirty = false;
-      msg.innerText = `Submitted contribution / 已提交贡献: ${data.contrib}`;
+      msg.innerText = t("submitted_contribution", {contribution: data.contrib});
     } else {
-      const t = await res.text();
-      msg.innerText = `Submit failed / 提交失败: ${t}`;
+      const detail = await res.text();
+      msg.innerText = t("submit_failed", {detail});
     }
   } finally {
     submitInFlight = false;
@@ -466,7 +706,7 @@ document.getElementById("action_form").addEventListener("submit", async (e) => {
   const inputs = Array.from(document.querySelectorAll("#action_table input[data-anon]"));
   const totalActionCost = actionPointTotal();
   if(totalActionCost > currentActionBudget){
-    msg.innerText = `Total action cost cannot exceed ${currentActionBudget} tokens. / 操作总成本不能超过 ${currentActionBudget} token。`;
+    msg.innerText = t("action_budget_exceeded", {budget: currentActionBudget});
     updateActionBudgetStatus();
     return;
   }
@@ -487,10 +727,10 @@ document.getElementById("action_form").addEventListener("submit", async (e) => {
     if(res.ok){
       const data = await res.json();
       resetActionDrafts();
-      msg.innerText = `Action submission saved. Cost: ${data.action_cost}/${data.action_budget}. / 操作提交已保存。成本：${data.action_cost}/${data.action_budget}。`;
+      msg.innerText = t("action_saved", {cost: data.action_cost, budget: data.action_budget});
     } else {
-      const t = await res.text();
-      msg.innerText = `Submit failed / 提交失败: ${t}`;
+      const detail = await res.text();
+      msg.innerText = t("submit_failed", {detail});
     }
   } finally {
     submitInFlight = false;
@@ -502,6 +742,10 @@ document.getElementById("contrib").addEventListener("input", () => {
   contribDraftDirty = true;
 });
 
+document.getElementById("student-language").addEventListener("change", event => {
+  applyLanguage(event.target.value);
+});
+applyLanguage(readStoredLanguage(), false);
 refreshStatus();
 async function pollStatus(){
   if(!submitInFlight){

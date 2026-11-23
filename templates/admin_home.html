@@ -4,14 +4,14 @@
 {% set subheading = "Create and manage classroom experiments" %}
 {% block top_right %}
 <form method="post" action="/admin/logout" style="display:inline;">
-  <button type="submit">Sign out</button>
+  <button type="submit" class="button-ghost">Sign out</button>
 </form>
 {% endblock %}
 {% block content %}
 
 <style>
-  .session-actions { display:flex; align-items:center; justify-content:center; gap:8px; white-space:nowrap; }
-  .session-actions a { display:inline-flex; align-items:center; justify-content:center; padding:10px 12px; border:1px solid #ccc; border-radius:10px; font-size:16px; line-height:normal; background:#fff; white-space:nowrap; word-break:normal; }
+  .session-actions { display:flex; align-items:center; justify-content:flex-start; gap:8px; white-space:nowrap; }
+  .session-actions form { margin:0; }
 </style>
 
 <div id="delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000; align-items:center; justify-content:center;">
@@ -20,7 +20,7 @@
     <p id="delete-modal-message" style="margin:0 0 20px 0;"></p>
     <div style="display:flex; gap:12px; justify-content:flex-end;">
       <button type="button" id="delete-modal-cancel" onclick="closeDeleteModal()" style="background:#f0f0f0; border-color:#ccc;">Cancel</button>
-      <button type="button" id="delete-modal-confirm" style="background:#c00; color:#fff; border-color:#a00;">Confirm</button>
+      <button type="button" id="delete-modal-confirm" class="button-danger">Confirm</button>
     </div>
   </div>
 </div>
@@ -77,7 +77,10 @@
   });
 </script>
 
-<div class="card">
+{% macro account_sections() %}
+<section class="card card-subtle admin-account" aria-labelledby="account-heading">
+  <div class="section-kicker">Account</div>
+  <h2 id="account-heading" style="margin:0 0 8px; font-size:1.1rem;">Signed-in account</h2>
   <div><b>Signed in as:</b> <span class="mono">{{ user.email or user.username }}</span></div>
   <div class="muted" style="margin-top:6px;">
     {% if is_admin %}
@@ -89,36 +92,36 @@
   {% if pw_change_required and not easy_auth %}
     <div class="pill warn" style="margin-top:10px;">You must change your password before managing sessions.</div>
   {% endif %}
-</div>
+</section>
 
 {% if not easy_auth %}
-<div class="card">
-  <h3>Change Password</h3>
+<section class="card admin-password" aria-labelledby="password-heading">
+  <h2 id="password-heading" style="margin:0 0 12px; font-size:1.15rem;">Change Password</h2>
   {% if pw_error %}<div class="pill warn" style="margin-bottom:8px;">{{ pw_error }}</div>{% endif %}
   {% if pw_success %}<div class="pill ok" style="margin-bottom:8px;">{{ pw_success }}</div>{% endif %}
   <form method="post" action="/admin/change_password" class="row">
     <div class="col">
-      <div class="muted">Current password</div>
-      <input name="current_password" type="password" required />
+      <label class="field-label" for="current-password">Current password</label>
+      <input id="current-password" name="current_password" type="password" required />
     </div>
     <div class="col">
-      <div class="muted">New password</div>
-      <input name="new_password" type="password" required />
+      <label class="field-label" for="new-password">New password</label>
+      <input id="new-password" name="new_password" type="password" required />
     </div>
     <div class="col">
-      <div class="muted">Confirm new password</div>
-      <input name="confirm_password" type="password" required />
+      <label class="field-label" for="confirm-password">Confirm new password</label>
+      <input id="confirm-password" name="confirm_password" type="password" required />
     </div>
     <div class="col" style="align-self:flex-end;">
       <button type="submit">Change Password</button>
     </div>
   </form>
-</div>
+</section>
 {% endif %}
 
 {% if is_admin %}
-<div class="card">
-  <h3>Teacher Accounts</h3>
+<section class="card admin-teachers" aria-labelledby="teacher-accounts-heading">
+  <h2 id="teacher-accounts-heading" style="margin:0 0 12px; font-size:1.15rem;">Teacher Accounts</h2>
   {% if teacher_error %}<div class="pill warn" style="margin-bottom:8px;">{{ teacher_error }}</div>{% endif %}
   {% if teacher_success %}<div class="pill ok" style="margin-bottom:8px;">{{ teacher_success }}</div>{% endif %}
   {% if teacher_temp_password and not easy_auth %}
@@ -194,7 +197,7 @@
                 </form>
               {% endif %}
               <form method="post" action="/admin/teachers/{{ teacher.id }}/delete" data-delete-mode="teacher" style="display:inline; margin-left:8px;">
-                <button type="button" onclick='openDeleteModal(this.form, {{ (teacher.email or teacher.username)|tojson }})' style="background:#c00; color:#fff; border-color:#a00;">Remove</button>
+                <button type="button" class="button-danger" onclick='openDeleteModal(this.form, {{ (teacher.email or teacher.username)|tojson }})'>Remove</button>
               </form>
             </td>
           </tr>
@@ -202,45 +205,54 @@
       </table>
     </div>
   {% endif %}
-</div>
+</section>
 {% endif %}
+{% endmacro %}
 
 {% if not must_change_password %}
-<div class="card">
-  <h3>Create New Session</h3>
-  <div class="muted" style="margin-bottom:8px;">
-    Set the total number of rounds. The teacher chooses Baseline, Reward, or Punishment when each round starts.
+<section class="card card-emphasis admin-create" aria-labelledby="create-session-heading">
+  <div class="section-header">
+    <div>
+      <div class="section-kicker">Start here</div>
+      <h2 id="create-session-heading" style="font-size:1.3rem;">Create New Session</h2>
+      <p class="section-copy">Set the classroom parameters now; choose the round type as each round begins.</p>
+    </div>
   </div>
   <form method="post" action="/admin/create" class="row">
     <div class="col">
-      <div class="muted">Title</div>
-      <input name="title" placeholder="Example: MPA Week 3 Public Goods Experiment" required />
+      <label class="field-label" for="session-title">Title</label>
+      <input id="session-title" name="title" placeholder="Example: MPA Week 3 Public Goods Experiment" required />
     </div>
     <div class="col">
-      <div class="muted">Target group size (3-7)</div>
-      <input name="group_size" type="number" value="5" min="3" max="7" />
+      <label class="field-label" for="group-size">Target group size (3-7)</label>
+      <input id="group-size" name="group_size" type="number" value="5" min="3" max="7" />
     </div>
     <div class="col">
-      <div class="muted">Multiplier</div>
-      <input name="multiplier" type="number" value="1.5" step="0.1" min="0.1" max="10" />
+      <label class="field-label" for="multiplier">Multiplier</label>
+      <input id="multiplier" name="multiplier" type="number" value="1.5" step="0.1" min="0.1" max="10" />
     </div>
     <div class="col">
-      <div class="muted">Endowment per round</div>
-      <input name="endowment" type="number" value="10" min="1" max="100" />
+      <label class="field-label" for="endowment">Endowment per round</label>
+      <input id="endowment" name="endowment" type="number" value="10" min="1" max="100" />
     </div>
     <div class="col">
-      <div class="muted">Rounds</div>
-      <input name="rounds" type="number" value="30" min="1" max="50" />
+      <label class="field-label" for="rounds">Rounds</label>
+      <input id="rounds" name="rounds" type="number" value="30" min="1" max="50" />
     </div>
     <div class="col" style="align-self:flex-end;">
-      <button type="submit">Create</button>
+      <button type="submit" class="primary">Create session</button>
     </div>
   </form>
-</div>
+</section>
 {% endif %}
 
-<div class="card">
-  <h3>Sessions</h3>
+<section class="card admin-sessions" aria-labelledby="sessions-heading">
+  <div class="section-header">
+    <div>
+      <div class="section-kicker">Classrooms</div>
+      <h2 id="sessions-heading" style="font-size:1.3rem;">Sessions</h2>
+    </div>
+  </div>
   <div class="muted" style="margin-bottom:8px;">
     {% if is_admin %}
       You can review every session across all teachers.
@@ -280,9 +292,9 @@
                 <span class="muted">Change password first</span>
               {% else %}
                 <div class="session-actions">
-                  <a href="/admin/{{ s.id }}">Manage</a>
+                  <a class="button button-primary" href="/admin/{{ s.id }}">Manage</a>
                   <form method="post" action="/admin/{{ s.id }}/delete" data-delete-mode="{% if is_admin %}delete{% else %}archive{% endif %}">
-                    <button type="button" onclick='openDeleteModal(this.form, {{ s.title|tojson }})'>
+                    <button type="button" class="button-danger" onclick='openDeleteModal(this.form, {{ s.title|tojson }})'>
                       {% if is_admin %}Delete{% else %}Remove{% endif %}
                     </button>
                   </form>
@@ -294,5 +306,6 @@
       </table>
     </div>
   {% endif %}
-</div>
+</section>
+{{ account_sections() }}
 {% endblock %}

@@ -1,6 +1,7 @@
 import csv
 import io
 import sqlite3
+from html.parser import HTMLParser
 
 from fastapi.testclient import TestClient
 
@@ -16,6 +17,198 @@ from tests.support import (
     setup_grouped_session,
     submit_contributions,
 )
+
+
+class _PageSemantics(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags = []
+        self.title_parts = []
+        self._in_title = False
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.append((tag, dict(attrs)))
+        if tag == "title":
+            self._in_title = True
+
+    def handle_endtag(self, tag):
+        if tag == "title":
+            self._in_title = False
+
+    def handle_data(self, data):
+        if self._in_title:
+            self.title_parts.append(data)
+
+
+def test_admin_pages_use_accessible_shared_shell(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        response = client.get("/admin")
+
+    assert response.status_code == 200
+    page = _PageSemantics()
+    page.feed(response.text)
+    assert sum(tag == "header" for tag, _ in page.tags) == 1
+    assert sum(tag == "main" for tag, _ in page.tags) == 1
+    assert any(tag == "nav" and attrs.get("aria-label") == "Page actions" for tag, attrs in page.tags)
+    assert "Control Panel" in "".join(page.title_parts)
+
+
+def test_teacher_pages_expose_primary_workflow_landmarks(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        home_response = client.get("/admin")
+        session_id = create_session(client, "Workflow Session")
+        panel_response = client.get(f"/admin/{session_id}")
+        app_module.upsert_whitelist(session_id, [("20260001", "Alice")])
+        prepared_panel_response = client.get(f"/admin/{session_id}")
+
+    home = _PageSemantics()
+    home.feed(home_response.text)
+    home_sections = [
+        attrs.get("aria-labelledby")
+        for tag, attrs in home.tags
+        if tag == "section"
+    ]
+    assert home_sections[:2] == ["create-session-heading", "sessions-heading"]
+    assert any(tag == "form" and attrs.get("action") == "/admin/create" for tag, attrs in home.tags)
+
+    panel = _PageSemantics()
+    panel.feed(panel_response.text)
+    assert any(
+        tag == "nav" and attrs.get("aria-label") == "Session workflow"
+        for tag, attrs in panel.tags
+    )
+    panel_sections = {
+        attrs.get("aria-labelledby")
+        for tag, attrs in panel.tags
+        if tag == "section"
+    }
+    assert {"setup-heading", "invite-heading", "run-heading", "review-heading"} <= panel_sections
+    assert any(
+        tag == "form" and attrs.get("action") == f"/admin/{session_id}/lock"
+        for tag, attrs in panel.tags
+    )
+
+    prepared_panel = _PageSemantics()
+    prepared_panel.feed(prepared_panel_response.text)
+    workflow_links = [
+        attrs
+        for tag, attrs in prepared_panel.tags
+        if tag == "a" and "workflow-step" in attrs.get("class", "")
+    ]
+    assert workflow_links[0]["href"] == "#setup-heading"
+    assert "is-complete" in workflow_links[0]["class"]
+    assert workflow_links[1]["href"] == "#invite-heading"
+    assert "is-active" in workflow_links[1]["class"]
+
+
+def test_student_page_prioritizes_accessible_current_action(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id, students, _ = setup_grouped_session(client, app_module, "Student Action")
+        response = client.get(f"/s/{session_id}/{students[0][0]}")
+
+    assert response.status_code == 200
+    page = _PageSemantics()
+    page.feed(response.text)
+    assert any(
+        tag == "section" and attrs.get("aria-labelledby") == "current-action-heading"
+        for tag, attrs in page.tags
+    )
+    assert any(
+        tag == "label" and attrs.get("for") == "contrib"
+        for tag, attrs in page.tags
+    )
+    assert any(
+        attrs.get("id") == "submit_msg" and attrs.get("aria-live") == "polite"
+        for _, attrs in page.tags
+    )
+    ids = {attrs.get("id") for _, attrs in page.tags if attrs.get("id")}
+    assert {
+        "anon_id", "group_no", "cur_round", "phase_badge", "stage_badge",
+        "submit_form", "contrib", "contrib_submit_btn", "submit_msg",
+        "action_wrap", "action_form", "action_table", "action_submit_btn",
+        "action_msg", "group_view_card", "group_table", "completed_phases",
+    } <= ids
+
+
+def test_student_page_defaults_to_english_and_exposes_language_selector(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id, students, _ = setup_grouped_session(client, app_module, "Student Language")
+        response = client.get(f"/s/{session_id}/{students[0][0]}")
+
+    assert response.status_code == 200
+    page = _PageSemantics()
+    page.feed(response.text)
+
+    assert any(tag == "html" and attrs.get("lang") == "en" for tag, attrs in page.tags)
+    assert any(
+        tag == "label" and attrs.get("for") == "student-language"
+        for tag, attrs in page.tags
+    )
+    assert any(
+        tag == "select"
+        and attrs.get("id") == "student-language"
+        and attrs.get("aria-label") == "Page language"
+        for tag, attrs in page.tags
+    )
+    option_values = {
+        attrs.get("value")
+        for tag, attrs in page.tags
+        if tag == "option"
+    }
+    assert {"en", "zh-CN"} <= option_values
+    assert '<h1 class="app-title">Student Page</h1>' in response.text
+    assert '>Current round action</h2>' in response.text
+    translation_keys = {
+        attrs.get("data-i18n")
+        for _, attrs in page.tags
+        if attrs.get("data-i18n")
+    }
+    assert {"status_kicker", "action_heading", "results_heading"} <= translation_keys
+
+
+def test_classroom_display_exposes_charts_and_exact_values(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id = create_session(client, "Projection Display")
+        response = client.get(f"/display/{session_id}")
+
+    assert response.status_code == 200
+    page = _PageSemantics()
+    page.feed(response.text)
+    figures = {
+        attrs.get("aria-labelledby")
+        for tag, attrs in page.tags
+        if tag == "figure"
+    }
+    assert {"group-chart-heading", "trend-chart-heading"} <= figures
+    assert any(
+        attrs.get("id") == "group_chart" and attrs.get("role") == "img"
+        for _, attrs in page.tags
+    )
+    assert any(
+        tag == "svg" and attrs.get("id") == "series_chart" and attrs.get("role") == "img"
+        for tag, attrs in page.tags
+    )
+    assert any(
+        attrs.get("id") == "overall_avg" and attrs.get("aria-live") == "polite"
+        for _, attrs in page.tags
+    )
+    ids = {attrs.get("id") for _, attrs in page.tags if attrs.get("id")}
+    assert {"group_table", "series_table", "group_chart_desc", "series_chart_desc"} <= ids
 
 
 def test_unlocked_round_shows_guidance_instead_of_json(monkeypatch, tmp_path):

@@ -3,14 +3,40 @@
 {% set heading = "Session Panel" %}
 {% set subheading = sess.title %}
 {% block top_right %}
-  <a href="/admin">&larr; Back</a>
+  <a class="button button-ghost" href="/admin">&larr; Back</a>
   <form method="post" action="/admin/logout" style="display:inline; margin-left:10px;">
-    <button type="submit">Sign out</button>
+    <button type="submit" class="button-ghost">Sign out</button>
   </form>
 {% endblock %}
 {% block content %}
 
-<div class="card">
+<section class="card card-emphasis" aria-labelledby="session-workflow-heading">
+  <div class="section-kicker">Classroom workflow</div>
+  <h2 id="session-workflow-heading" style="margin:0; font-size:1.35rem;">Run this session step by step</h2>
+  <p class="section-copy">Prepare the roster, invite students, run each round, then review the outcomes.</p>
+  <nav class="workflow" aria-label="Session workflow">
+    <a class="workflow-step {% if counts.whitelist == 0 %}is-active{% else %}is-complete{% endif %}" href="#setup-heading">
+      <span class="workflow-number">Step 1</span>
+      <span class="workflow-label">Prepare</span>
+    </a>
+    <a class="workflow-step {% if counts.whitelist > 0 and sess.locked == 0 %}is-active{% elif sess.locked == 1 %}is-complete{% endif %}" href="#invite-heading">
+      <span class="workflow-number">Step 2</span>
+      <span class="workflow-label">Invite &amp; group</span>
+    </a>
+    <a class="workflow-step {% if sess.locked == 1 and not round_ctx.completed %}is-active{% elif round_ctx.completed %}is-complete{% endif %}" href="#run-heading">
+      <span class="workflow-number">Step 3</span>
+      <span class="workflow-label">Run</span>
+    </a>
+    <a class="workflow-step {% if round_ctx.completed %}is-active{% endif %}" href="#review-heading">
+      <span class="workflow-number">Step 4</span>
+      <span class="workflow-label">Review</span>
+    </a>
+  </nav>
+</section>
+
+<section class="card card-subtle" aria-labelledby="session-settings-heading">
+  <div class="section-kicker">Session details</div>
+  <h2 id="session-settings-heading" style="margin:0 0 16px; font-size:1.2rem;">Links and settings</h2>
   {% if title_error %}<div class="pill warn" style="margin-bottom:8px;">{{ title_error }}</div>{% endif %}
   {% if join_link_success %}<div class="pill ok" style="margin-bottom:8px;">{{ join_link_success }}</div>{% endif %}
   {% if demo_error %}<div class="pill warn" style="margin-bottom:8px;">{{ demo_error }}</div>{% endif %}
@@ -120,10 +146,12 @@
   <div class="muted" style="margin-top:8px;">Use this when you need a new student join link without changing the session itself.</div>
   <div style="margin-top:8px;"><b>Classroom display:</b> <a href="{{ display_url }}" target="_blank">Open projection page</a></div>
   <div style="margin-top:8px;"><b>Export data:</b> <a href="{{ export_url }}">Download CSV (long format by round)</a></div>
-</div>
+</section>
 
-<div class="card">
-  <h3>Whitelist (student ID + name must match exactly)</h3>
+<section class="card" aria-labelledby="setup-heading">
+  <div class="section-kicker">Step 1 · Prepare</div>
+  <h2 id="setup-heading" style="margin:0 0 8px; font-size:1.2rem;">Prepare the roster</h2>
+  <p class="muted">Student ID and name must match exactly.</p>
   <div class="muted">Current whitelist count: <b id="whitelist-count">{{ counts.whitelist }}</b>. If no whitelist is uploaded, students cannot join.</div>
 
   <div class="row" style="margin-top:10px;">
@@ -149,10 +177,11 @@
       <div class="muted" style="margin-top:6px;">After clearing, no students can join this session.</div>
     </div>
   </div>
-</div>
+</section>
 
-<div class="card">
-  <h3>Grouping</h3>
+<section class="card" aria-labelledby="invite-heading">
+  <div class="section-kicker">Step 2 · Invite &amp; group</div>
+  <h2 id="invite-heading" style="margin:0 0 12px; font-size:1.2rem;">Invite and group the class</h2>
   <div class="row">
     <div class="col">
       <div aria-live="polite">Roster joined: <b id="roster-joined-count">{{ counts.roster_joined }}</b> of <b id="roster-total-count">{{ counts.whitelist }}</b></div>
@@ -170,16 +199,16 @@
     <div class="col mobile-left" style="text-align:right;">
       {% if sess.locked == 0 %}
       <form method="post" action="/admin/{{ sess.id }}/lock" style="display:inline;">
-        <button type="submit">Randomize groups and lock</button>
+        <button type="submit" class="primary">Randomize groups and lock</button>
       </form>
       {% else %}
         <span class="muted">To regroup, create a new session.</span>
       {% endif %}
     </div>
   </div>
-</div>
+</section>
 
-<div class="card">
+<section class="card card-subtle">
   <h3>Demo Tools</h3>
   <div class="muted">
     Use this to show the full live classroom procedure without manually joining a real class. Demo automation is enabled only for demo sessions.
@@ -228,10 +257,11 @@
   {% else %}
     <div class="muted" style="margin-top:10px;">Create demo mode from a fresh session before real students join or rounds are computed.</div>
   {% endif %}
-</div>
+</section>
 
-<div class="card">
-  <h3>Round Control</h3>
+<section class="card card-emphasis" aria-labelledby="run-heading">
+  <div class="section-kicker">Step 3 · Run</div>
+  <h2 id="run-heading" style="margin:0 0 12px; font-size:1.3rem;">Current round control</h2>
   {% if round_error %}<div class="pill warn" role="alert" style="margin-bottom:8px;">{{ round_error }}</div>{% endif %}
   <div>
     Current total round: <b>{{ round_ctx.round }}</b> / {{ sess.rounds }}
@@ -268,7 +298,7 @@
             <option value="punishment">Punishment</option>
             <option value="reward">Reward</option>
           </select>
-          <button type="submit" style="margin-top:8px;">Choose type and open contribution stage</button>
+          <button type="submit" class="primary" style="margin-top:8px;">Choose type and open contribution stage</button>
         </form>
         <div class="muted" style="margin-top:6px;">The selected type is locked as soon as the round opens.</div>
       {% else %}
@@ -279,17 +309,17 @@
     <div class="col">
       {% if round_ctx.phase == "baseline" and round_ctx.stage == "contribution" %}
         <form method="post" action="/admin/{{ sess.id }}/close_and_compute">
-          <button type="submit">Close contribution and compute round</button>
+          <button type="submit" class="primary">Close contribution and compute round</button>
         </form>
         <div class="muted" style="margin-top:6px;">Baseline rounds compute immediately after contribution closes.</div>
       {% elif round_ctx.phase != "baseline" and round_ctx.stage == "contribution" %}
         <form method="post" action="/admin/{{ sess.id }}/open_action_stage">
-          <button type="submit">Lock contribution and open {{ round_ctx.phase_label }} stage</button>
+          <button type="submit" class="primary">Lock contribution and open {{ round_ctx.phase_label }} stage</button>
         </form>
         <div class="muted" style="margin-top:6px;">Students see this round's group contributions only after you open this stage.</div>
       {% elif round_ctx.phase != "baseline" and round_ctx.stage == "action" %}
         <form method="post" action="/admin/{{ sess.id }}/close_and_compute">
-          <button type="submit">Close {{ round_ctx.phase_label }} stage and compute round</button>
+          <button type="submit" class="primary">Close {{ round_ctx.phase_label }} stage and compute round</button>
         </form>
         <div class="muted" style="margin-top:6px;">Compute only when all students have finished their action choices.</div>
       {% else %}
@@ -298,10 +328,11 @@
       {% endif %}
     </div>
   </div>
-</div>
+</section>
 
-<div class="card">
-  <h3>Round Type Overview</h3>
+<section class="card" aria-labelledby="review-heading">
+  <div class="section-kicker">Step 4 · Review</div>
+  <h2 id="review-heading" style="margin:0 0 12px; font-size:1.2rem;">Round type overview</h2>
   <div class="row">
     {% for status in phase_statuses %}
       <div class="col">
@@ -311,10 +342,10 @@
       </div>
     {% endfor %}
   </div>
-</div>
+</section>
 
-<div class="card">
-  <h3>Current Round Progress</h3>
+<section class="card" aria-labelledby="round-progress-heading">
+  <h2 id="round-progress-heading" style="margin:0 0 8px; font-size:1.2rem;">Current Round Progress</h2>
   <div class="muted">Submission counts update automatically every few seconds.</div>
   <div class="row">
     <div class="col">
@@ -363,10 +394,10 @@
   {% else %}
     <div class="muted" style="margin-top:10px;">Individual contributions stay hidden until the reward or punishment stage opens.</div>
   {% endif %}
-</div>
+</section>
 
 {% for report in phase_reports %}
-<div class="card">
+<section class="card">
   <h3>{{ report.phase_label }} Results ({{ report.computed_rounds }} rounds)</h3>
   <div class="row">
     <div class="col">
@@ -418,11 +449,11 @@
       </table>
     </div>
   </div>
-</div>
+</section>
 {% endfor %}
 
-<div class="card">
-  <h3>Students (teacher-only identity mapping)</h3>
+<section class="card" aria-labelledby="students-heading">
+  <h2 id="students-heading" style="margin:0 0 8px; font-size:1.2rem;">Students <span class="muted">(teacher-only identity mapping)</span></h2>
   {% if students|length == 0 %}
     <div class="muted">No students have joined yet.</div>
   {% else %}
@@ -444,7 +475,7 @@
     </table>
   </div>
   {% endif %}
-</div>
+</section>
 
 <script>
 (() => {

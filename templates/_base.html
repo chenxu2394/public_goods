@@ -3,49 +3,26 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>{{ title if title else "Public Goods Experiment" }}</title>
-  <style>
-    body{font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin:20px; line-height:1.4;}
-    .card{border:1px solid #ddd; border-radius:12px; padding:16px; margin:12px 0;}
-    .row{display:flex; gap:12px; flex-wrap:wrap;}
-    .col{flex:1; min-width:260px;}
-    input, button{font-size:16px; padding:10px 12px; border-radius:10px; border:1px solid #ccc; box-sizing:border-box; max-width:100%;}
-    input[type="file"]{display:block; width:100%;}
-    button{cursor:pointer;}
-    .muted{color:#666;}
-    .pill{display:inline-block; padding:4px 10px; border-radius:999px; border:1px solid #ccc; font-size:13px;}
-    table{border-collapse:collapse; width:100%;}
-    th,td{border:1px solid #e5e5e5; padding:8px; text-align:center;}
-    th{background:#f6f6f6;}
-    .ok{color:#0a7;}
-    .warn{color:#b50;}
-    .err{color:#c00;}
-    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;}
-    .table-scroll{max-height:24rem; overflow:auto; margin-top:12px;}
-    .table-scroll th{position:sticky; top:0; z-index:1;}
-    a{color:#06c; text-decoration:none;}
-    a:hover{text-decoration:underline;}
-    a, .mono{overflow-wrap:anywhere; word-break:break-word;}
-    @media (max-width:640px){
-      body{margin:12px;}
-      .card{padding:14px;}
-      .row{gap:10px;}
-      .col{min-width:100%;}
-      .mobile-left{text-align:left !important;}
-    }
-  </style>
+  <title>{{ title if title else ((heading ~ " · Public Goods Experiment") if heading else "Public Goods Experiment") }}</title>
+  {% include "_styles.html" %}
 </head>
 <body data-scroll-page="{{ scroll_page if scroll_page else request.url.path }}">
-  <div class="row">
-    <div class="col">
-      <h2 style="margin:0 0 6px 0;">{{ heading if heading else "" }}</h2>
-      <div class="muted">{{ subheading if subheading else "" }}</div>
-    </div>
-    <div class="col" style="text-align:right;">
-      {% block top_right %}{% endblock %}
-    </div>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <div class="page-shell">
+    <header class="app-header">
+      <div class="app-heading">
+        <div class="app-kicker">Public Goods Experiment</div>
+        <h1 class="app-title">{{ heading if heading else "" }}</h1>
+        {% if subheading %}<p class="app-subtitle">{{ subheading }}</p>{% endif %}
+      </div>
+      <nav class="page-actions" aria-label="Page actions">
+        {% block top_right %}{% endblock %}
+      </nav>
+    </header>
+    <main class="app-main" id="main-content">
+      {% block content %}{% endblock %}
+    </main>
   </div>
-  {% block content %}{% endblock %}
   {% include "_scroll_preservation.html" %}
 </body>
 </html>
