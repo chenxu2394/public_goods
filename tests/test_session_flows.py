@@ -107,6 +107,72 @@ def test_teacher_pages_expose_primary_workflow_landmarks(monkeypatch, tmp_path):
     assert "is-active" in workflow_links[1]["class"]
 
 
+def test_closed_round_omits_inert_compute_control(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id, _, _ = setup_grouped_session(client, app_module, "Closed Round Controls")
+        response = client.get(f"/admin/{session_id}")
+
+    assert response.status_code == 200
+    assert f'action="/admin/{session_id}/open_round"' in response.text
+    assert "Compute round" not in response.text
+
+
+def test_round_open_form_uses_responsive_inline_layout(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id, _, _ = setup_grouped_session(client, app_module, "Round Type Controls")
+        response = client.get(f"/admin/{session_id}")
+
+    assert response.status_code == 200
+    page = _PageSemantics()
+    page.feed(response.text)
+    assert any(
+        tag == "form"
+        and attrs.get("action") == f"/admin/{session_id}/open_round"
+        and "round-open-form" in attrs.get("class", "")
+        for tag, attrs in page.tags
+    )
+
+
+def test_closed_round_hides_empty_compute_column(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id, _, _ = setup_grouped_session(client, app_module, "Round Control Width")
+        response = client.get(f"/admin/{session_id}")
+
+    assert response.status_code == 200
+    page = _PageSemantics()
+    page.feed(response.text)
+    assert any(
+        tag == "div"
+        and "round-compute-column" in attrs.get("class", "")
+        and "hidden" in attrs
+        for tag, attrs in page.tags
+    )
+
+
+def test_action_stage_does_not_show_wait_requirement(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        assert login(client).status_code == 303
+        session_id, _, _ = setup_grouped_session(client, app_module, "Action Stage Controls")
+        open_round(client, session_id, 1, "reward")
+        open_action_stage(client, session_id)
+        response = client.get(f"/admin/{session_id}")
+
+    assert response.status_code == 200
+    assert "Close Reward stage and compute round" in response.text
+    assert "finished their action choices" not in response.text
+
+
 def test_student_page_prioritizes_accessible_current_action(monkeypatch, tmp_path):
     app_module, _ = load_app(monkeypatch, tmp_path)
 

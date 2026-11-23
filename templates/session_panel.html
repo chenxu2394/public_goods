@@ -289,16 +289,18 @@
         <button type="button" disabled>Choose type and open contribution stage</button>
         <div class="muted" style="margin-top:6px;">Randomize groups and lock them above before opening a round.</div>
       {% elif round_ctx.stage == "closed" %}
-        <form method="post" action="/admin/{{ sess.id }}/open_round">
+        <form method="post" action="/admin/{{ sess.id }}/open_round" class="round-open-form">
           <input type="hidden" name="round_no" value="{{ round_ctx.round }}" />
-          <label for="round-phase"><span class="muted">Round type</span></label>
-          <select id="round-phase" name="phase" required style="margin-top:6px;">
-            <option value="" selected disabled>Choose a round type</option>
-            <option value="baseline">Baseline / No intervention</option>
-            <option value="punishment">Punishment</option>
-            <option value="reward">Reward</option>
-          </select>
-          <button type="submit" class="primary" style="margin-top:8px;">Choose type and open contribution stage</button>
+          <div class="round-open-field">
+            <label for="round-phase"><span class="muted">Round type</span></label>
+            <select id="round-phase" name="phase" required style="margin-top:6px;">
+              <option value="" selected disabled>Choose a round type</option>
+              <option value="baseline">Baseline / No intervention</option>
+              <option value="punishment">Punishment</option>
+              <option value="reward">Reward</option>
+            </select>
+          </div>
+          <button type="submit" class="primary">Choose type and open contribution stage</button>
         </form>
         <div class="muted" style="margin-top:6px;">The selected type is locked as soon as the round opens.</div>
       {% else %}
@@ -306,7 +308,7 @@
         <div class="muted" style="margin-top:6px;">{{ round_ctx.phase_label }} is locked for this round.</div>
       {% endif %}
     </div>
-    <div class="col">
+    <div class="col round-compute-column" {% if round_ctx.stage == "closed" %}hidden{% endif %}>
       {% if round_ctx.phase == "baseline" and round_ctx.stage == "contribution" %}
         <form method="post" action="/admin/{{ sess.id }}/close_and_compute">
           <button type="submit" class="primary">Close contribution and compute round</button>
@@ -321,10 +323,6 @@
         <form method="post" action="/admin/{{ sess.id }}/close_and_compute">
           <button type="submit" class="primary">Close {{ round_ctx.phase_label }} stage and compute round</button>
         </form>
-        <div class="muted" style="margin-top:6px;">Compute only when all students have finished their action choices.</div>
-      {% else %}
-        <button type="button" disabled>Compute round</button>
-        <div class="muted" style="margin-top:6px;">Open the current round first.</div>
       {% endif %}
     </div>
   </div>
