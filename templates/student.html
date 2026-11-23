@@ -181,6 +181,7 @@ const translations = {
     group_cumulative_income: "Group cumulative income",
     group_total_contribution: "Group total contribution",
     latest_completed_round: "Latest completed round",
+    latest_round_format: "Session round {round} · {phase} round {phase_round}",
     your_income: "Your income",
     your_contribution: "Your contribution",
     group_income: "Group income",
@@ -255,6 +256,7 @@ const translations = {
     group_cumulative_income: "小组累计收益",
     group_total_contribution: "小组累计贡献",
     latest_completed_round: "最近完成轮次",
+    latest_round_format: "总轮次 {round} · {phase}第 {phase_round} 轮",
     your_income: "你的收益",
     your_contribution: "你的贡献",
     group_income: "小组收益",
@@ -402,7 +404,13 @@ function renderPhaseStatuses(statuses){
 
 function renderCurrentPhase(summary){
   document.getElementById("phase_progress").innerText = summary.computed_rounds;
-  document.getElementById("latest_round_summary").innerText = summary.latest_round === null ? "-" : `${summary.latest_round} / ${summary.latest_phase_round}`;
+  document.getElementById("latest_round_summary").innerText = summary.latest_round === null
+    ? "-"
+    : t("latest_round_format", {
+        round: summary.latest_round,
+        phase: phaseLabelText(summary.phase_label),
+        phase_round: summary.latest_phase_round
+      });
   document.getElementById("student_latest_income").innerText = summary.student_latest_income.toFixed(2);
   document.getElementById("student_latest_contrib").innerText = summary.student_latest_contrib;
   document.getElementById("group_latest_income").innerText = summary.group_latest_income.toFixed(2);

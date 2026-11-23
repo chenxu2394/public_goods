@@ -2156,8 +2156,20 @@ def test_phase_cumulative_resets_and_completed_phase_reports_are_retained(monkey
         assert status.status_code == 200
         payload = status.json()
 
-        assert payload["current_phase"]["phase"] is None
-        assert payload["current_phase"]["latest_round"] is None
+        assert payload["session"]["phase"] is None
+        assert payload["session"]["phase_label"] == "Not selected"
+        assert payload["current_phase"]["phase"] == "reward"
+        assert payload["current_phase"]["computed_rounds"] == 1
+        assert payload["current_phase"]["latest_round"] == 11
+        assert payload["current_phase"]["latest_phase_round"] == 1
+        assert payload["current_phase"]["student_latest_income"] == 10.0
+        assert payload["current_phase"]["student_latest_contrib"] == 1
+        assert payload["current_phase"]["group_latest_income"] == 35.0
+        assert payload["current_phase"]["group_latest_contrib"] == 6
+        assert payload["current_phase"]["student_phase_cumulative"] == 10.0
+        assert payload["current_phase"]["student_total_contrib"] == 1
+        assert payload["current_phase"]["group_phase_cumulative"] == 35.0
+        assert payload["current_phase"]["group_total_contrib"] == 6
         assert [phase["phase"] for phase in payload["completed_phases"]] == ["baseline", "reward"]
         assert payload["completed_phases"][0]["student_summary"]["final_phase_cumulative"] == 140.0
 

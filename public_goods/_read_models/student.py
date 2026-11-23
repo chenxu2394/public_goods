@@ -32,6 +32,20 @@ def build_student_status_payload(session_id: str, student_id: str) -> StudentSta
     total_rounds = int(sess["rounds"])
     computed_counts = phase_computed_counts_conn(conn, session_id)
     phase, phase_round = phase_context_conn(conn, sess)
+    summary_phase = phase
+    if summary_phase is None:
+        latest_result = conn.execute(
+            """
+            SELECT phase
+            FROM results
+            WHERE session_id=?
+            ORDER BY round_no DESC
+            LIMIT 1
+        """,
+            (session_id,),
+        ).fetchone()
+        if latest_result is not None:
+            summary_phase = str(latest_result["phase"])
     computed_rounds = sum(computed_counts.values())
     phase_statuses = build_phase_status(
         total_rounds,
@@ -39,8 +53,8 @@ def build_student_status_payload(session_id: str, student_id: str) -> StudentSta
         active_phase=phase if computed_rounds < total_rounds else None,
     )
     current_phase_report = (
-        build_student_phase_report_conn(conn, session_id, str(stu["id"]), phase)
-        if phase is not None
+        build_student_phase_report_conn(conn, session_id, str(stu["id"]), summary_phase)
+        if summary_phase is not None
         else None
     )
 
@@ -109,10 +123,10 @@ def build_student_status_payload(session_id: str, student_id: str) -> StudentSta
     conn.close()
 
     current_phase_summary = {
-        "phase": phase,
-        "phase_label": phase_label(phase) if phase is not None else "Not selected",
+        "phase": summary_phase,
+        "phase_label": phase_label(summary_phase) if summary_phase is not None else "Not selected",
         "phase_round": phase_round,
-        "computed_rounds": int(computed_counts.get(phase, 0)) if phase is not None else 0,
+        "computed_rounds": int(computed_counts.get(summary_phase, 0)) if summary_phase is not None else 0,
         "total_rounds": None,
         "latest_round": None,
         "latest_phase_round": None,
@@ -166,7 +180,7 @@ def build_student_status_payload(session_id: str, student_id: str) -> StudentSta
             "round_open": bool(int(sess["round_open"])),
             "action_open": bool(int(sess["action_open"])),
             "phase": phase,
-            "phase_label": current_phase_summary["phase_label"],
+            "phase_label": phase_label(phase) if phase is not None else "Not selected",
             "phase_round": phase_round,
             "stage": stage,
         },
