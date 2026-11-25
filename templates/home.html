@@ -13,6 +13,7 @@
       min-height:100vh;
       box-sizing:border-box;
       display:flex;
+      flex-direction:column;
       align-items:center;
       justify-content:center;
       padding:24px;
@@ -21,6 +22,7 @@
       color:#16202a;
     }
     .panel{
+      box-sizing:border-box;
       width:min(720px, 100%);
       padding:48px 32px;
       border:1px solid #d8e1ea;
@@ -39,6 +41,15 @@
       font-size:0.95rem;
       color:#4b5a68;
     }
+    .demo{
+      display:block;
+      width:min(720px, 100%);
+      height:auto;
+      margin-top:24px;
+      border:1px solid #d8e1ea;
+      border-radius:20px;
+      box-shadow:0 18px 48px rgba(22, 32, 42, 0.08);
+    }
   </style>
 </head>
 <body data-scroll-page="home">
@@ -47,6 +58,7 @@
     <h1>Public Goods Experiment</h1>
     <p>Please wait for and follow the teacher's instruction</p>
   </main>
+  <img class="demo" src="{{ request.url_for('home_demo') }}" alt="Public Goods Experiment demo"/>
   {% include "_scroll_preservation.html" %}
 </body>
 </html>

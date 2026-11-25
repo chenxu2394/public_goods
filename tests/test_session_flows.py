@@ -607,6 +607,21 @@ def test_all_html_pages_include_scroll_preservation(monkeypatch, tmp_path):
         assert "public-goods:pending-scroll" in response.text
 
 
+def test_home_page_displays_demo_image(monkeypatch, tmp_path):
+    app_module, _ = load_app(monkeypatch, tmp_path)
+
+    with TestClient(app_module.app) as client:
+        home_response = client.get("/")
+        image_response = client.get("/demo.webp")
+
+    assert home_response.status_code == 200
+    assert 'class="demo"' in home_response.text
+    assert 'src="http://testserver/demo.webp"' in home_response.text
+    assert image_response.status_code == 200
+    assert image_response.headers["content-type"] == "image/webp"
+    assert image_response.content.startswith(b"RIFF")
+
+
 def test_share_link_page_and_api_payload_remain_consistent(monkeypatch, tmp_path):
     app_module, _ = load_app(monkeypatch, tmp_path)
 

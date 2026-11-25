@@ -6,14 +6,7 @@ In a public-goods experiment, participants decide how many tokens to contribute 
 
 Students participate from their phones or laptops. Instructors manage sessions, show results to the class, and export the data for analysis. Instructor pages require an approved Microsoft account, and students need a session join link.
 
-## Screenshots
-
-These screenshots show a demo session with sample data. Select an image to view it at full size.
-
-|                                                                                      Session panel                                                                                      |                                                                                 Student page                                                                                 |                                                                                             Classroom display                                                                                              |
-| :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------: | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
-| <a href="docs/assets/session-panel.png"><img src="docs/assets/thumbnails/session-panel.png" alt="Session panel showing the student join URL, QR code, and data export" width="180"></a> | <a href="docs/assets/student-page.png"><img src="docs/assets/thumbnails/student-page.png" alt="Student page showing an open contribution round and results" width="180"></a> | <a href="docs/assets/classroom-display.png"><img src="docs/assets/thumbnails/classroom-display.png" alt="Classroom display showing group contributions and average contribution by round" width="180"></a> |
-|                                                         Share a QR code or URL, manage the student roster, and export results.                                                          |                                                       Submit a contribution and follow individual and group outcomes.                                                        |                                                                  Compare group contributions and follow the class average across rounds.                                                                   |
+![demo](./docs/assets/demo.webp)
 
 ## How it works
 
